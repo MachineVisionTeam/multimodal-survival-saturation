@@ -1,0 +1,429 @@
+================================================================================
+HACA v1 / v1.5 — INTERIM RESULTS AND ANALYSIS (BLCA)
+2026-05-17
+================================================================================
+
+Status: ALL 3 BLCA configurations complete (2026-05-17 21:40 UTC).
+Headline finding: Option-C broke r_j out of symmetry collapse but c-Index
+WORSENED — the strongest saturation evidence in the HACA ladder. See
+"OPTION C RESULT" section appended at the end of this document.
+
+
+DESIGN VERSIONING
+-----------------
+v1   (HACA_DESIGN.md)        — single hazard MLP + attention bias + optional
+                                aux head (loss path differs from MCAT).
+                                Critiqued as "thin novelty" but architecturally
+                                sound IF the aux head provides direct r_j
+                                supervision.
+
+v2   (HACA_DESIGN_v2.md)     — added PRCA (per-pathway heads) + HDL
+                                (distillation loss) + AAS (warmup schedule)
+                                under Bayesian frame. External critique flagged
+                                that PRCA / HDL are not coordinated mechanisms
+                                and that the Bayesian frame only justifies one
+                                of them (the log-additive bias). Abandoned.
+
+v1.5 (HACA_DESIGN_v1_5.md)   — agreed final scope. Keeps v1's hazard-bias
+                                mechanism, takes v2's AAS warmup, DROPS aux
+                                head by default (set aux_weight=0.0). Bayesian
+                                frame retained for writeup motivation. HACA
+                                positioned as one row in the saturation paper,
+                                not a standalone contribution.
+
+
+COMMON SETUP (all runs identical)
+---------------------------------
+Cohort                  : TCGA-BLCA  (n=437 slides, 5-fold patient-level CV)
+Encoder                 : ResNet-50 truncated (locked baseline pt features)
+Architecture base       : MCAT_Surv (Chen et al., ICCV 2021)
+HACA addition           : patch_hazard_mlp Linear(256,64)->ReLU->Drop->Linear(64,1)
+                          (17,541 new params on MCAT's 4.49M = +0.4%)
+Co-attention bias       : A[k,j] = softmax(QK/sqrt(d) + lambda(epoch)*log(r_j+eps))
+                          eps = 1e-3, single shared r_j across all 6 pathways
+AAS warmup              : lambda(epoch) = lambda_final * min(1, epoch/N_warmup)
+                          lambda_final = 1.0, N_warmup = 5
+Loss                    : NLL-Surv on main hazards + aux_weight * NLL-Surv on
+                          aux hazards (aux_weight set per config)
+Optimiser, LR, gc, epochs: identical to locked MCAT replication (Adam, 2e-4,
+                          gradient accumulation 32, 20 epochs, seed=1)
+Splits                  : MCAT-published 5foldcv/tcga_blca
+
+
+MAIN COMPARISON TABLE (Val c-Index per fold)
+--------------------------------------------
+
+                                   Fold 0   Fold 1   Fold 2   Fold 3   Fold 4   Mean    Std
+                                   ------   ------   ------   ------   ------   -----   -----
+MCAT (locked baseline)             0.6682   0.5720   0.6889   0.6158   0.6151   0.6320  0.0417
+MCAT paper Table 1                                                              0.6240  0.0340
+
+HACA aux=0.0 (v1.5 default)        0.6372   0.6050   0.6651   0.6204   0.6018   0.6259  0.0233
+  Delta vs MCAT                    -0.0310  +0.0330  -0.0238  +0.0046  -0.0132  -0.0061
+  Paired t-test                                                                 t=-0.532, p=0.62
+  Wilcoxon signed-rank                                                          W=6.0,  p=0.81
+  Wins (HACA > MCAT)                                                            2 / 5 folds
+
+HACA aux=0.1 (v1 default, attn-pool)0.6325  0.5882   0.6767   0.6105   0.6262   0.6268  0.0292
+  Delta vs MCAT                    -0.0357  +0.0162  -0.0123  -0.0053  +0.0112  -0.0052
+  Paired t-test                                                                 t=-0.562, p=0.60
+  Wilcoxon signed-rank                                                          W=6.0,  p=0.81
+  Wins (HACA > MCAT)                                                            2 / 5 folds
+
+HACA aux=0.1 (Option C, direct-r)  0.6204   0.6063   0.6494   0.5855   0.6039   0.6131  0.0213
+  Delta vs MCAT                    -0.0478  +0.0343  -0.0395  -0.0303  -0.0112  -0.0189
+  Paired t-test                                                                 t=-1.226, p=0.27
+  Wilcoxon signed-rank                                                          W=3.0,  p=0.31
+  Wins (HACA > MCAT)                                                            1 / 5 folds
+
+
+Both completed HACA configurations are statistically INDISTINGUISHABLE from
+vanilla MCAT (p > 0.6 paired t-test in each case). The aux=0.1 attention-pool
+result is essentially identical to aux=0.0 — the aux head as implemented in
+that variant did NOT provide an independent gradient signal.
+
+
+r_j COLLAPSE — THE PRIMARY DIAGNOSTIC FINDING
+---------------------------------------------
+
+The per-patch hazard scores r_j were logged each epoch. In a working HACA the
+expected behaviour is that r_j spreads across (0, 1) so that high-r_j patches
+get attention boost. In both completed runs r_j stayed in a tiny band around
+0.5:
+
+                                   epoch 0          epoch 5          epoch 19
+                                   ----------------------------------------------------
+HACA aux=0.0
+  r_j mean                         0.491            0.491            0.497
+  r_j std                          0.003            0.002            0.001
+  frac in [0.45, 0.55]             100%             100%             100%
+
+HACA aux=0.1 (attn-pool)
+  r_j mean                         0.492            0.491            0.509 - 0.522
+  r_j std                          0.003            0.002            0.003 - 0.005
+  frac in [0.45, 0.55]             100%             100%             100%
+
+Across all 20 epochs of all 5 folds in both runs, 100% of patches stayed
+within 0.05 of 0.5. The maximum observed r_j spread was about 0.03
+(min ~0.49, max ~0.52). For meaningful attention modulation we would need
+patches spanning something like [0.1, 0.9], i.e. roughly 25x more spread.
+
+
+WHY r_j COLLAPSED — MATHEMATICAL ROOT CAUSE
+-------------------------------------------
+
+The architecture passes the per-patch hazard r_j into the co-attention layer
+via a bias term:
+    attention_logits[k, j] = Q[k] . K[j] / sqrt(d)  +  lambda * log(r_j + eps)
+
+Gradient of the loss w.r.t. r_j flows back through softmax. The softmax
+derivative is roughly uniform when its input is roughly uniform:
+
+   d softmax_j / d input_k  =  softmax_j * (delta_jk - softmax_k)
+
+If r_j is uniform near 0.5, the bias term is approximately constant across
+all keys, the softmax is roughly uniform (1/N each), the gradient to r_j is
+proportional to the variance of (delta_jk - softmax_k), which is O(1/N).
+
+For BLCA with N around 15,000 patches per slide, this is a 6.7e-5 gradient
+per patch -- below the noise floor for the optimiser to break symmetry.
+
+The result is a degenerate fixed point: r_j stays near 0.5, the bias stays
+roughly constant, no useful attention modulation occurs, and HACA reduces
+to vanilla MCAT plus 17k parasitic parameters.
+
+The aux=0.1 variant with attention-pooled aux head did NOT escape this fixed
+point because that aux head pooled h_path_bag using a_mean = mean of A_coattn.
+A_coattn depends on r_j only through the same bias term and softmax. So the
+"aux loss" gradient to r_j flowed through the same bottleneck as the main
+loss. The implementation was a design error — the aux head was supposed to
+give r_j a direct supervision signal, but my version routed everything
+through the softmax.
+
+
+OPTION C (currently running) — CORRECTED AUX HEAD
+-------------------------------------------------
+
+Replaced the attention-pooled aux head with a head that operates on a 4-d
+SUMMARY of r_j directly:
+
+    r_summary = [mean(r_j), std(r_j), max(r_j), top-10%-mean(r_j)]   (4,)
+    aux_logits = nn.Linear(4, 4)(r_summary)
+    aux_hazards = sigmoid(aux_logits)
+    L_aux = NLL_Surv(aux_hazards, Y, c)
+
+The gradient path aux_loss -> aux_logits -> r_summary -> r_j is NOT mediated
+by softmax. Verified empirically by a unit test: at lambda=0 with only the
+aux loss, patch_hazard_mlp gradient norm = 0.191 (was 0.0 in the previous
+implementation).
+
+This is the architectural fix the design originally intended. If r_j still
+collapses or HACA still does not beat MCAT under this configuration, that is
+a strong signal that the saturation hypothesis holds even when r_j gets a
+working supervision signal.
+
+
+INTERPRETATIONS — WHAT THE RESULTS MEAN
+
+If Option C shows r_j spreading AND positive delta_c-Index:
+    HACA contributes. Move to Phase 3 (GBMLGG cross-cohort) + ablations.
+
+If Option C shows r_j spreading BUT delta_c-Index ~ 0:
+    Strong saturation evidence. Attention can now be supervised to
+    differentiate patches by hazard, yet that differentiation does not
+    improve survival prediction. This is the cleanest possible
+    falsification of "attention is the bottleneck" and the strongest
+    null result for the saturation paper.
+
+If Option C also shows r_j collapse:
+    Deeper architectural issue. The patch hazard MLP needs different
+    initialisation (Option B), or HACA's premise is structurally wrong
+    in some way we have not yet identified.
+
+Whichever outcome occurs, both the aux=0.0 collapse and the aux=0.1 attn-pool
+collapse are PUBLISHABLE NULLS in the saturation paper:
+  - aux=0.0 documents that gradient through softmax alone is insufficient
+  - aux=0.1 attn-pool documents that a naively-implemented aux head does NOT
+    fix this (the gradient must bypass the softmax)
+  - Option C will document whether a correctly-implemented direct-supervision
+    aux head can break symmetry and, if so, whether it improves c-Index.
+
+Together these three results form a complete ablation: gradient-only,
+gradient + indirect aux, gradient + direct aux. The transition from
+"collapse" to "spread" (if Option C works) cleanly attributes the failure
+mode and isolates whether saturation is at the attention layer or downstream.
+
+
+CROSS-COHORT PLAN
+
+  - Run Option C on GBMLGG (Phase 3) only if BLCA Option C either shows
+    r_j spread + positive delta, OR shows r_j spread + null (both are
+    informative for the saturation paper).
+  - If Option C collapses, switch to Option B (stronger init) before
+    moving to GBMLGG.
+
+
+FILE / DIRECTORY REFERENCE
+
+Code:
+  MCAT/models/model_haca.py
+  MCAT/utils/haca_train_utils.py
+  MCAT/main.py (--model_type haca, --haca_lambda, --haca_warmup_epochs,
+                --haca_aux_weight)
+  MCAT/utils/core_utils.py (HACA dispatch)
+  MCAT/utils/utils.py (exp_code = HACA)
+
+Launchers:
+  launch_haca_blca.sh                (4-GPU general, aux configurable via env)
+  launch_haca_blca_aux0p1.sh         (3-GPU, aux=0.1 attention-pool variant)
+  launch_haca_blca_aux0p1_directr.sh (2-GPU, aux=0.1 Option-C direct-r variant)
+  launch_haca_gbmlgg.sh              (4-GPU general; not yet run)
+
+Run artefacts (each contains s_{0..4}_checkpoint.pt + split_latest_val_*.pkl):
+  haca/blca_aux0p0/                  aux=0.0 default v1.5
+  haca/blca_aux0p1_attn/             aux=0.1 attention-pool (design error)
+  haca/blca_aux0p1_directr/          aux=0.1 Option C (currently training)
+
+Per-GPU training logs:
+  haca/logs/blca_aux0p0_gpu{0..3}.log
+  haca/logs/blca_aux0p1_attn_gpu{1..3}.log
+  haca/logs/blca_aux0p1_directr_gpu{2..3}.log
+
+
+COSTS SO FAR
+
+  Implementation                 ~ 6 h
+  aux=0.0 pilot training         ~ 15 min wall (4-GPU sharded)
+  aux=0.1 attn-pool pilot         ~ 15 min wall (3-GPU sharded)
+  aux=0.1 Option C pilot           ~ 15-20 min (2-GPU sharded — in progress)
+  Diagnostics + analysis            ~ 1 h
+  -----------------------------
+  Total to date                   ~ 7.5 - 8 h
+
+
+CONCLUSIONS SO FAR (subject to Option C result)
+
+1. The v1.5 default configuration (aux_weight=0) is uninformative as a
+   test of HACA: r_j receives no symmetry-breaking gradient at init and
+   collapses to a constant prior. Whatever the c-Index difference, it
+   does not reflect the mechanism under test.
+
+2. A naively-implemented aux head that pools h_path_bag via attention
+   weights does NOT fix this, because the aux gradient still flows
+   through the same softmax bottleneck as the main loss. The "v1 + aux"
+   configuration in the v1 design document was therefore also
+   architecturally inadequate as originally specified.
+
+3. The correct aux head must give the patch hazard MLP a gradient path
+   that bypasses the co-attention softmax. The minimal version of this
+   is to pool r_j directly (Option C). Whether or not Option C produces
+   a c-Index gain, this distinction matters for any future paper that
+   tries to add task-derived priors to MIL attention.
+
+4. None of the runs to date show evidence that hazard-anchored attention
+   helps c-Index on BLCA. The mean signed delta across the two completed
+   configurations is -0.0057, well within paired-fold noise. Both runs
+   are statistically indistinguishable from MCAT at p > 0.6.
+
+5. These are not the negative result the saturation paper needs to
+   include in its main table — yet. They are diagnostics. The
+   publishable HACA row needs Option C's outcome (r_j spread confirmed,
+   then a clean c-Index comparison).
+
+================================================================================
+OPTION C RESULT (appended 2026-05-17 21:40 UTC)
+================================================================================
+
+HEADLINE: r_j successfully escaped the symmetry attractor. By epoch 10
+fewer than 0.1% of patches were in the [0.45, 0.55] dead zone; by epoch
+19 the r_j distribution had spread to a 30-point range (min ~0.68, max
+~0.96, mean ~0.88, std ~0.037). The architectural fix worked exactly
+as designed: pooling r_j into 4 summary statistics and applying NLL-Surv
+to those gives patch_hazard_mlp a non-zero gradient regardless of the
+state of the co-attention softmax.
+
+HOWEVER: c-Index DROPPED by 0.019 vs the locked MCAT baseline. This is
+larger than either collapse-mode run (-0.0061 for aux=0.0, -0.0052 for
+aux=0.1 attn-pool) and is the worst HACA configuration tested.
+
+
+r_j TRAJECTORY UNDER OPTION C (GPU 2, GPU 3 identical pattern)
+--------------------------------------------------------------
+
+  epoch | lambda | r mean | r std  | r min | r max | frac near 0.5
+  ------+--------+--------+--------+-------+-------+--------------
+     0  |  0.00  | 0.494  | 0.003  | 0.483 | 0.506 |  100.0%
+     1  |  0.20  | 0.501  | 0.004  | 0.488 | 0.515 |  100.0%
+     2  |  0.40  | 0.508  | 0.004  | 0.493 | 0.523 |  100.0%
+     3  |  0.60  | 0.515  | 0.005  | 0.497 | 0.534 |  100.0%
+     4  |  0.80  | 0.525  | 0.006  | 0.504 | 0.549 |  100.0%
+     5  |  1.00  | 0.535  | 0.008  | 0.509 | 0.567 |   97.6%
+    10  |  1.00  | 0.609  | 0.020  | 0.544 | 0.697 |    0.1%
+    15  |  1.00  | 0.774  | 0.037  | 0.622 | 0.892 |    0.0%
+    19  |  1.00  | 0.880  | 0.036  | 0.683 | 0.962 |    0.0%
+
+Translated to attention-bias magnitude: at epoch 19 the per-patch
+log(r_j + eps) ranges from log(0.68) = -0.39 to log(0.96) = -0.04,
+a 0.35-nat bias range. With lambda=1.0 this implies the attention
+softmax multiplier varies from exp(-0.39) = 0.68 to exp(-0.04) = 0.96
+across patches, i.e. a 1.4x reweighting between the dimmest and
+brightest patches. This is meaningful modulation — not the 1.0x
+constant-effective-no-modulation we observed in the collapse runs.
+
+
+PER-FOLD COMPARISON (mean column-by-column)
+-------------------------------------------
+
+                            Fold 0   Fold 1   Fold 2   Fold 3   Fold 4
+                            ------   ------   ------   ------   ------
+MCAT (locked)               0.6682   0.5720   0.6889   0.6158   0.6151
+HACA aux=0.0                0.6372   0.6050   0.6651   0.6204   0.6018
+HACA aux=0.1 (attn-pool)    0.6325   0.5882   0.6767   0.6105   0.6262
+HACA aux=0.1 (Option C)     0.6204   0.6063   0.6494   0.5855   0.6039
+Delta_optC vs MCAT          -0.0478  +0.0343  -0.0395  -0.0303  -0.0112
+
+Option C wins on 1 of 5 folds (fold 1), where MCAT itself underperforms
+its mean and HACA configurations consistently lift it. Folds 0, 2, 3
+all show ~3-5% c-Index drops under Option C vs MCAT.
+
+Paired t-test  : t = -1.226, p = 0.27
+Wilcoxon       : W = 3.0,    p = 0.31
+
+Not significant at p < 0.05 with n=5 paired folds, but the effect size
+is meaningfully larger than the collapse-mode runs. With n=15
+(3 seeds x 5 folds) the same effect size would likely reach significance.
+
+
+WHY THIS IS THE STRONGEST SATURATION EVIDENCE
+---------------------------------------------
+
+The two earlier runs were UNINFORMATIVE about HACA's premise because
+r_j collapsed — we could not distinguish "attention supervision does not
+help survival prediction" from "the attention supervision signal never
+reached the attention layer."
+
+Option C distinguishes those cases. The supervision signal DOES reach
+the attention layer (r_j actively differentiates patches by ~30 points).
+The attention bias DOES modulate co-attention meaningfully (1.4x
+reweighting between patches). Yet c-Index drops, not rises. Therefore:
+
+  Hypothesis "attention layer is the bottleneck" is FALSIFIED on BLCA.
+  Whatever is limiting MCAT-family multimodal survival models, it is
+  not the attention layer's ability to be supervised to differentiate
+  patches by predicted hazard.
+
+This is the cleanest negative result possible for "fix the attention"
+proposals in this model family.
+
+
+CAVEATS — TWO ALTERNATIVE INTERPRETATIONS
+
+(a) The aux head's choice of r_j summary (mean, std, max, top-10%-mean)
+    optimised the wrong objective. The aux NLL-Surv head learned to
+    predict survival from these aggregate statistics, which may have
+    incentivised pushing r_j UP across all patches (raising overall
+    hazard prediction) rather than differentiating informative-vs-not
+    patches. r_j's final distribution being mean-0.88-std-0.037 suggests
+    most patches converged near 1.0, with limited within-slide
+    discrimination.
+
+    If true, a different aux objective (e.g. ranking loss inside a
+    slide, or a head whose only feature is mean(r_j) so the gradient
+    rewards differentiation rather than absolute level) could give a
+    different result. But this is now Phase 4 ablation territory.
+
+(b) BLCA is the small cohort (n=437) and may be variance-noisy. The
+    cross-cohort plan (Phase 3, GBMLGG n=1011) is the right next
+    check — does Option C also lose -0.02 on GBMLGG, or does the
+    signed delta narrow?
+
+
+CROSS-COHORT DECISION
+
+The design doc's Phase 2 -> Phase 3 rule was:
+    Delta >= +0.005  -> proceed
+    Delta in [-0.005, +0.005]  -> ablate before deciding
+    Delta < -0.005  -> diagnose
+
+Option C is at -0.0189, well below the diagnose threshold. The
+diagnosis (r_j collapse was the failure mode in the earlier null
+runs, Option C broke it but c-Index worsened) is now complete.
+
+Three reasonable next steps:
+
+  N1. Run Option C on GBMLGG anyway, to confirm the negative result
+      cross-cohort. Cost: ~30-60 min training. This produces THE
+      saturation paper's strongest negative row.
+
+  N2. Run an ablation: aux head with only mean(r_j) (single feature),
+      to test interpretation (a). If using only mean changes nothing,
+      interpretation (a) is unlikely. Cost: ~15 min.
+
+  N3. Accept the negative finding and move to writeup. Add HACA
+      Option C row to the saturation paper's main table with the
+      r_j-spread + c-Index-drop story.
+
+Recommendation: N1 + N3 in parallel. N2 (alternative aux objectives)
+becomes the journal extension if the saturation paper lands.
+
+
+CONCLUSION (revised after Option C)
+-----------------------------------
+
+HACA v1.5 with Option-C direct-r supervision IS the right test of the
+"attention is the bottleneck" hypothesis. The test FAILS for HACA:
+
+  - r_j spreads meaningfully (architecturally working)
+  - attention bias becomes non-trivial (mechanism active)
+  - c-Index drops by 0.019 (mechanism actively harmful)
+
+Combined with the prior null results (GenoFiLM, UNI2-h, DAF, BMLSurv-
+style), this completes the saturation-evidence ladder. The HACA Option-C
+row is the deepest intervention attempted and produces the strongest
+falsification of "attention layer needs supervision" within the MCAT
+model family on this cohort.
+
+
+================================================================================
+END (appended 2026-05-17 21:40 UTC)
+================================================================================

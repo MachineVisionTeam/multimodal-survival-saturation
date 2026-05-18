@@ -1,0 +1,69 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Trained models / checkpoints ---
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# --- Per-fold prediction / results files (large) ---
+*.pkl
+*.npy
+*.npz
+
+# --- Raw / pre-extracted data (TCGA-controlled, NOT to be redistributed) ---
+*.svs
+*.tiff
+*.tif
+*.h5
+*.hdf5
+*.zarr/
+*.csv.zip
+data/
+data_raw/
+raw_data/
+runs_modern/
+checkpoints/
+results/
+patches/
+features/
+*_svs_flat/
+all_st*/
+all_dataset.csv
+TCGA_*/
+
+# --- Logs and intermediate outputs ---
+*.log
+logs/
+*.out
+nohup.out
+*.tmp
+*.cache
+
+# --- Secrets and credentials (defensive) ---
+*.token
+*.pat
+.env
+.env.*
+*.pem
+*.key
+.aws/
+.ssh/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/

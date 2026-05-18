@@ -1,0 +1,630 @@
+================================================================================
+DSM-Pathomic — Modality-Specific Deep Survival Machines on Pathomic Fusion
+Architecture design document — 2026-05-18
+================================================================================
+
+Status: design only. No code yet. Pre-implementation review.
+
+Decision context: GRFN-Pathomic Phase 2c (calibration audit, 2026-05-18)
+falsified the pre-registered hypothesis that an evidential combination rule
+would deliver calibration gains under Cox partial likelihood. Result:
+GRFN IBS 0.1049 +/- 0.0130 vs PF 0.0971 +/- 0.0103 (Δ = +0.0078, paired-t
+p = 0.005; loss in 14/15 folds). Mechanistic diagnosis: GRFN's calibration
+channels (σ²_f, h_f) are computed by the combination rule but never enter
+the Cox loss gradient, so the architectural calibration guarantee is
+discarded. This pivots the saturation paper from a single architectural
+lever to THREE independent levers — architecture / encoder / loss — and
+makes DSM-Pathomic (the loss-function lever) the load-bearing remaining
+experiment.
+
+
+--------------------------------------------------------------------------------
+0. TL;DR (one paragraph)
+--------------------------------------------------------------------------------
+DSM-Pathomic replaces both PF's Cox partial likelihood AND its
+TrilinearFusion_A block with a 3K-component Weibull mixture (Deep Survival
+Machines; Nagpal, Li, Dubrawski, IEEE JBHI 25(8):3163-3175, 2021) in which
+each component's shape/scale parameters are predicted by a SINGLE modality
+and the mixture weights are predicted by the concatenated embedding. The
+training objective is the DSM mixture log-likelihood — a parametric survival
+likelihood that does *not* throw away calibration information the way Cox
+does. The model produces full S(t|x) at any time t, so IBS/IBLL are
+computable natively without a Breslow estimator. ~1,920 parameters at the
+fusion+head stage vs PF's ~3.57M (~1,860x reduction), with the locked
+PF encoders (PathNet/VGG, GraphNet/GCN, MaxNet/SNN) unchanged and frozen.
+This is the saturation paper's loss-function row: the only known way to
+test whether the calibration ceiling is Cox-specific or deeper.
+
+
+--------------------------------------------------------------------------------
+0.5  Novelty claim (lock down before writing the paper)
+--------------------------------------------------------------------------------
+
+DSM-Pathomic is NOT a new architecture. Pre-registering this honestly so
+the writeup language doesn't drift toward over-claiming.
+
+  Component                                        | Year | New here?
+  -------------------------------------------------+------+------------
+  Deep Survival Machines (DSM) core method         | 2021 | NO. Nagpal/Li/Dubrawski IEEE JBHI.
+  Multimodal DSM (MMDCSM, cross-modal components)  | 2025 | NO. Wen et al., ICCVW. Alzheimer's MRI+CSF.
+  DSM on Pathomic Fusion's locked encoders         | 2026 | YES (this work). No prior publication.
+  TCGA-GBMLGG / KIRC DSM benchmark numbers         | 2026 | YES (this work). No prior publication.
+  Modality-specific component parameterisation     | 2026 | INCREMENTAL over MMDCSM. Small structural choice;
+       (each component's α/β from one modality;          |        designed for per-modality attribution
+        mixture weights from all three)                  |        (see §2.3, §5 ablation A2).
+  Role as the loss-function row of the saturation  | 2026 | YES. Methodological positioning, not architectural.
+       paper                                              |
+
+The publishable contribution is therefore:
+  (i) the controlled paired-comparison test (DSM-Pathomic vs locked PF,
+      same encoders, same splits, same seed convention),
+  (ii) the three-lever saturation framing (architecture / encoder / loss),
+  (iii) the first DSM numbers on TCGA-GBMLGG / KIRC with PF's encoders.
+
+Not:
+  (x) DSM itself as a new model — it's 5 years old.
+  (x) Multimodal DSM as a new mechanism — MMDCSM did it in 2025.
+  (x) Modality-specific components as a novel architecture — it's a
+      parameterisation choice over MMDCSM, not a new family.
+
+
+--------------------------------------------------------------------------------
+0.6  Paper-section positioning (use this language verbatim)
+--------------------------------------------------------------------------------
+
+Methods section template (locks the honest framing):
+
+  "We adopt Deep Survival Machines (Nagpal et al., 2021) as the
+  parametric survival model. Following the multimodal variant of
+  MMDCSM (Wen et al., 2025), we parameterise each Weibull component
+  with a single modality's encoder output, with mixture weights
+  predicted from the concatenated trimodal embedding. We deploy this
+  configuration as the loss-function arm of a controlled paired
+  comparison against the locked Pathomic Fusion baseline, isolating
+  the parametric survival likelihood as the experimental variable
+  while keeping encoders, splits, and seeds identical."
+
+Three-row novelty table (for the related-work section):
+
+  Row              | Architectural novelty                       | Scientific novelty
+  -----------------+---------------------------------------------+------------------------------------------
+  GRFN-Pathomic    | Cox-PH reformulation of GRFN                | Tests evidential fusion under Cox loss
+  HACA             | Survival-supervised attention bias          | Tests attention-level survival supervision
+  DSM-Pathomic     | Modality-specific DSM components            | Tests the loss-function lever in saturation
+                   |   (incremental over MMDCSM)                  |
+
+The paper's contribution is the systematic test, not the individual
+architectures. A skeptical reviewer asking "is DSM-Pathomic a new
+model?" should land on this table and accept "no — it's an existing
+model applied in a specific configuration as part of a controlled
+experimental ladder testing the saturation thesis."
+
+
+--------------------------------------------------------------------------------
+1. Why DSM-Pathomic exists (and why it exists NOW)
+--------------------------------------------------------------------------------
+
+1.1  The pre-registered falsification
+
+The GRFN-Pathomic design doc (HACA_DESIGN_v1_5 / GRFN_Pathomic_ARCHITECTURE)
+predicted:
+   "P(IBS gain at flat c-Index | flat Δ c-Index) ≈ 0.65"
+   "GRFN's combination rule produces calibrated uncertainty by construction.
+    Cox + concordance optimization actively dis-incentivizes calibration.
+    So you're essentially guaranteed to improve IBS over MCAT unless the
+    Cox-mu_f loss flattens μ_f to a single proportional-hazards regression."
+
+The Phase 2c experimental result: 15-fold paired IBS audit on GBMLGG.
+
+  Method                          IBS              Δ vs PF
+  -----------------------------------------------------------
+  PF (locked baseline)            0.0971 ± 0.0103
+  PF + post-hoc Platt scaling     0.0946 ± 0.0099  -0.0025
+  GRFN-Pathomic                   0.1049 ± 0.0130  +0.0078
+                                                   (paired-t p = 0.005,
+                                                    Wilcoxon p = 0.0006)
+  GRFN won (lower IBS) in 1/15 folds.
+
+The "Cox-mu_f loss flattens μ_f" branch of the design prediction was the
+correct one: σ²_f and h_f, the GRFN calibration channels, are computed by
+the GRFN combination rule but never enter the Cox loss gradient. The
+Breslow estimator that produces calibrated S(t|x) for IBS computation
+consumes only μ_f. The sigmoid+[-3,+3] squashing further compresses μ_f's
+distribution relative to PF's unbounded linear classifier. The result is
+mathematically inevitable: GRFN under Cox is equivalent to a single-scalar
+Cox predictor with extra unused channels.
+
+This is a CLEAN MECHANISTIC FALSIFICATION, not a noisy null. The architectural
+calibration channel is real (the σ²_f, h_f are computed and bounded), but it
+is gradient-free under Cox.
+
+1.2  What that result implies for the saturation paper
+
+Before Phase 2c, the saturation paper had one lever (architecture):
+   "8 fusion families tested. All fail. The c-Index ceiling is data-bound."
+
+After Phase 2c, the paper has THREE independent levers:
+   "Three levers — architecture, encoder, and loss function — and at least
+    two of them (architecture, encoder) are closed against meaningfully
+    breaking either the c-Index or the calibration ceiling on TCGA-GBMLGG.
+    The third lever (loss function) is open and is tested here."
+
+DSM-Pathomic is the loss-function row. It is the only remaining lever
+that has not been systematically tested on the locked PF baseline.
+
+1.3  Why DSM specifically (not DeepHit, not DeepSurv, not full-likelihood-GRFN)
+
+Three reasons DSM is the right choice for THIS test:
+
+  (a) DSM produces a parametric S(t|x) at any time, so IBS/IBLL are
+      computable natively from the predicted mixture without Breslow.
+      The Cox+Breslow workaround that compressed GRFN's calibration is
+      eliminated by construction.
+
+  (b) DSM's mixture-of-Weibulls form has a CALIBRATED LIKELIHOOD by
+      design — the negative log-likelihood directly penalises miscalibrated
+      S(t|x). This is the converse of Cox's concordance-optimising
+      partial likelihood that the Ghawami audit (arXiv 2604.04239)
+      identified as the source of the calibration failure.
+
+  (c) The mixture form gives a clean modality-attribution channel: each
+      Weibull component's parameters are predicted by a single modality,
+      so the mixture weights w_{m,k}(x) describe which modality's
+      survival distribution drives each patient's prediction. This is
+      analogous to GRFN's r_m but at the survival-distribution level,
+      not at the risk-scalar level.
+
+The alternative (DeepHit) uses discrete-time hazards with a softmax over
+fixed time bins. It is also calibration-aware but introduces
+discretisation artefacts. The Ghawami audit explicitly flagged the
+discrete 4-bin formulation in MCAT/PORPOISE/SurvPath as a partial source
+of GBMLGG miscalibration. DSM's continuous Weibull form avoids this.
+
+The alternative (full-likelihood-GRFN — see Section 6 below) is the
+DIAGNOSIS test for the GRFN result, not the saturation test. Both should
+run; DSM is the primary saturation row, full-likelihood-GRFN is the
+mechanistic confirmation arm.
+
+
+--------------------------------------------------------------------------------
+2. Mathematical specification
+--------------------------------------------------------------------------------
+
+2.1  Notation
+   x  = (x_path, x_graph, x_omic)  - patient input
+   h_p, h_g, h_o ∈ R^32           - locked PF modality embeddings
+   K                              - number of Weibull components per modality
+                                     (default K=4 per design survey
+                                      Recommendation 2)
+   M = 3                          - number of modalities (path, graph, omic)
+   t_i, delta_i                   - survival time and event indicator
+                                    (delta_i = 1 if event, 0 if censored)
+
+2.2  Per-modality Weibull mixture component heads (NEW)
+
+   For each modality m ∈ {p, g, o}, a small linear head emits 2K positive
+   parameters (K shape, K scale):
+       [logα_{m,1}, ..., logα_{m,K}, logβ_{m,1}, ..., logβ_{m,K}]
+           = Linear_m(h_m)            Linear(32 → 2K)
+       α_{m,k} = exp(logα_{m,k}).clamp(0.5, 5.0)    Weibull shape
+       β_{m,k} = exp(logβ_{m,k}).clamp(0.1, 100.0)  Weibull scale
+
+   Shape clamps prevent the Weibull from degenerating (α < 0.5 gives
+   pathological decreasing-hazard, α > 5 gives near-deterministic time);
+   scale clamps prevent numerical overflow on log(t). Standard ranges
+   from auton-survival's reference DSM implementation.
+
+   Each head: 32 × 2K weight + 2K bias = (32 × 2K + 2K) params
+   For K=4: 264 params × 3 modalities = 792 params.
+
+2.3  Mixture weight head (NEW)
+
+   The 3K mixture weights are predicted from the CONCATENATED embedding,
+   so the gating sees all three modalities (analogous to GRFN's contextual
+   reliability head):
+       logits = Linear_w(cat(h_p, h_g, h_o))   Linear(96 → 3K)
+       w(x) = softmax(logits)                  shape (3K,), sums to 1
+
+   For K=4 (3K=12): 96 × 12 + 12 = 1,164 params.
+
+2.4  DSM survival function
+
+   The fused survival function at time t > 0:
+
+       S(t | x) = Σ_{m ∈ {p,g,o}} Σ_{k=1..K}
+                    w_{m,k}(x) · S_Weibull(t; α_{m,k}(x_m), β_{m,k}(x_m))
+
+   where the single-component Weibull survival function is:
+       S_Weibull(t; α, β) = exp(-(t / β)^α)
+
+   The mixture is over 3K = 12 components (for K=4). Each component is
+   parameterised by a single modality; the weights are contextual (depend
+   on all three).
+
+   Important: w_{m,k}(x) is the mixture weight for component k of modality m,
+   and is predicted from concat(h_p, h_g, h_o). This is the design survey
+   Recommendation 2's "modality-specific Deep Survival Machines mixture":
+   crucially each component's shape/scale are SINGLE-modality, so the
+   mixture component distribution preserves per-modality attribution.
+
+2.5  DSM training loss
+
+   The DSM negative log-likelihood on a batch of N patients:
+
+   L_DSM = -1/N Σ_i [ δ_i log f(t_i | x_i) + (1 - δ_i) log S(t_i | x_i) ]
+
+   where:
+       f(t|x) = - d/dt S(t|x)
+              = Σ_{m,k} w_{m,k}(x) · (α/β) (t/β)^(α-1) exp(-(t/β)^α)
+                                                 (per-component Weibull density)
+
+   For numerical stability use log-domain computations (log_w, log_S,
+   logsumexp). Reference: auton-survival's `dsm.losses.conditional_loss`.
+
+   Optional regularisation: ELBO-style term penalising deviation of
+   mixture weights from a learned prior (auton-survival's "discount"
+   hyperparameter). Default: disabled — adds tuning surface without
+   clear benefit for our paired-comparison protocol.
+
+2.6  Cox-comparable risk for c-Index reporting
+
+   For backward compatibility with the saturation paper's c-Index column,
+   we report a scalar risk derived from S(t|x). Standard choice:
+
+       risk_i = -E[T_i]
+              = -Σ_{m,k} w_{m,k}(x_i) · β_{m,k} · Γ(1 + 1/α_{m,k})
+
+   where E[T] for a Weibull(α, β) is β·Γ(1 + 1/α). Negative because
+   "higher risk → shorter expected time."
+
+   Concordance is then computed on these risks against (t_i, δ_i) using
+   sksurv.metrics.concordance_index_censored, identical to PF/GRFN.
+
+2.7  Predicted hazard for ablations (not used in loss)
+
+   For Phase 4 ablation studies (modality attribution), we can also report
+   the per-modality marginal survival:
+       S_m(t | x) = Σ_{k=1..K} w_{m,k}(x) · S_Weibull(t; α_{m,k}, β_{m,k}) / Σ_k w_{m,k}(x)
+   re-normalised within each modality's component set. This gives a
+   per-modality predicted survival curve — direct attribution for the
+   "which modality's distribution did this patient's prediction come from"
+   question.
+
+
+--------------------------------------------------------------------------------
+3. Where it sits in the locked Pathomic Fusion pipeline
+--------------------------------------------------------------------------------
+
+PF pipeline (TrilinearFusion_A + Cox):
+
+   x_path  → PathNet/VGG  → h_p ∈ R^32                LOCKED
+   x_graph → GraphNet     → h_g ∈ R^32                LOCKED
+   x_omic  → MaxNet/SNN   → h_o ∈ R^32                LOCKED
+
+   ↓ bilinear gating + Kronecker product + encoder1+2  REPLACED
+   ↓ Linear classifier                                  REPLACED
+   ↓ sigmoid * 6 - 3 activation                         REMOVED
+   ↓ Cox partial-likelihood loss                        REPLACED
+
+DSM-Pathomic pipeline:
+
+   x_path  → PathNet/VGG  → h_p ∈ R^32                LOCKED (same as PF)
+   x_graph → GraphNet     → h_g ∈ R^32                LOCKED (same as PF)
+   x_omic  → MaxNet/SNN   → h_o ∈ R^32                LOCKED (same as PF)
+
+   ↓ Linear_p(h_p) → (α_{p,1..K}, β_{p,1..K})       NEW (264 params)
+   ↓ Linear_g(h_g) → (α_{g,1..K}, β_{g,1..K})       NEW (264 params)
+   ↓ Linear_o(h_o) → (α_{o,1..K}, β_{o,1..K})       NEW (264 params)
+   ↓ Linear_w(cat(h_p,h_g,h_o)) → 3K mixture weights NEW (1,164 params)
+   ↓ DSM Weibull-mixture S(t|x), f(t|x)              closed form
+   ↓ DSM negative log-likelihood                     REPLACES Cox loss
+
+   For c-Index reporting:
+   risk_i = -E_w[β · Γ(1 + 1/α)]                     scalar, for concordance
+
+   For IBS reporting:
+   S(t|x) evaluated at eval_times                    direct, no Breslow
+
+Encoders stay frozen and identical to PF. Splits, modality data
+preprocessing, and the train/test convention are unchanged. The only
+differences from PF are the head + the loss.
+
+
+--------------------------------------------------------------------------------
+4. Parameter count comparison
+--------------------------------------------------------------------------------
+
+PF (TrilinearFusion_A + encoder1 + encoder2 + classifier):
+   bilinear_z heads + skip + Kronecker encoder + classifier
+                                                  ≈ 3,573,601 params
+
+GRFN-Pathomic (3 modality heads + reliability head, parameter-free combo):
+                                                  ≈ 588 params
+
+DSM-Pathomic (3 modality Weibull heads + mixture gate, K=4):
+   3 × (32 × 8 + 8) + (96 × 12 + 12)              ≈ 1,956 params
+
+   (vs design survey's quoted ~1,920 — the small discrepancy is whether
+    you count biases; same order of magnitude either way.)
+
+DSM-Pathomic fusion+head block is ~1,827× smaller than PF's fusion+head
+block and ~3× larger than GRFN's. Same order-of-magnitude story: extreme
+parameter reduction with no clear architectural advantage to PF.
+
+
+--------------------------------------------------------------------------------
+5. Required ablations
+--------------------------------------------------------------------------------
+
+A1.  K sweep: K ∈ {1, 2, 4, 8}.
+     - K=1 reduces to a per-modality Weibull AFT model (no mixture).
+     - K=4 is the default (auton-survival's reference choice).
+     - K=8 tests whether more components rescue calibration.
+     If K=1 already gives the IBS gain, the mixture is unnecessary and
+     the contribution is "Weibull likelihood beats Cox" not "modality-
+     specific mixture beats Cox" — that distinction matters for the paper.
+
+A2.  Cross-modality mixture (each component's α/β predicted from concat of all
+     three modalities instead of one).
+     This is the design survey's "critical ablation" — recovers exactly
+     the MMDCSM (Wen et al., ICCVW 2025) configuration and isolates the
+     modality-attribution claim. If A2 gives same IBS as the default,
+     the attribution part of DSM-Pathomic is decorative.
+
+A3.  Replace Weibull with Log-Normal parametric form.
+     Sanity check on parametric form. Same DSM structure, different
+     distribution family. Tells us whether the gain is from "any
+     parametric likelihood" or "Weibull specifically."
+
+A4.  Modality lesion runs (drop each of path/graph/omic by zeroing).
+     Check that DSM's mixture weights w_{m,*} concentrate on the
+     remaining modalities, matching GRFN's reliability-saturation
+     observation.
+
+A5.  Calibration metric battery: IBS, IBLL, D-calibration (Haider et al.
+     2020), Hosmer-Lemeshow at the GBMLGG event-time quintiles
+     (matches the Ghawami audit protocol). Required for direct
+     comparability with the audit paper's claim of "MCAT fails 1-calibration
+     on all 5 GBMLGG folds."
+
+A6.  c-Index reporting at the standard PF / GRFN convention (negative
+     expected survival time as risk).
+     For paired comparison with PF and GRFN.
+
+A7.  Cox-comparable substitution: train DSM with K=1 AND replace the
+     DSM negative log-likelihood with Cox partial-likelihood on -E[T].
+     This is the critical isolation experiment — if it matches PF's IBS,
+     then the entire DSM gain is from the likelihood, not the mixture
+     structure. Conversely, if it matches PF's c-Index, then the
+     architectural mixture doesn't change discrimination.
+
+
+--------------------------------------------------------------------------------
+6. Companion experiment — full-likelihood GRFN (mechanistic confirmation arm)
+--------------------------------------------------------------------------------
+
+DSM tests the LOSS-FUNCTION lever generically. To confirm that the GRFN
+calibration channel WOULD have helped under the right loss, run an
+additional companion experiment:
+
+   GRFN-Pathomic with Gaussian survival likelihood on log(t):
+     L_GRFN_native = -log N( log(t_i) | mu_f(x_i), sigma_f²(x_i) ) * delta_i
+                    + censored_term
+
+   This is EsurvFusion's actual training objective (arXiv 2412.01215v1
+   Section 4), which uses a Gaussian likelihood on log-time rather than
+   Cox. It propagates gradient through ALL THREE GRFN channels (μ_f, σ_f²,
+   h_f) and through the per-modality reliabilities r_m.
+
+   Implementation cost: ~50 LOC on top of existing GRFN code. ~2 days.
+   Status in the paper: secondary mechanistic-confirmation row, NOT the
+   primary loss-function lever (DSM is).
+
+The companion experiment lets us distinguish two narratives:
+
+  Narrative A (DSM wins on IBS, GRFN-native-likelihood also wins):
+     "The Cox loss specifically discards calibration. Any likelihood-based
+     loss recovers it. The architectural details (DSM vs GRFN-native) are
+     interchangeable; the loss is the lever."
+
+  Narrative B (DSM wins on IBS, GRFN-native-likelihood does not):
+     "The mixture-of-Weibulls form is the right inductive bias for
+     calibrated survival. Gaussian-on-log-time, despite being a
+     likelihood, is not. The Weibull mixture is doing real work."
+
+Both are publishable. Narrative A is the cleaner saturation-paper finding
+(the loss is the lever); Narrative B is a richer scientific story.
+
+If DSM AND GRFN-native both null on IBS, we have the strongest possible
+saturation finding: even the loss-function lever is closed. That is the
+TOMM submission's strongest pitch.
+
+
+--------------------------------------------------------------------------------
+7. Implementation plan (phased)
+--------------------------------------------------------------------------------
+
+Phase 0  Library install + module stub + smoke test  (Day 1-2)
+   - Install auton-survival into pathomic_fusion_replica/.venv
+     (or write the ~80 LOC DSM module from scratch using sksurv +
+      torch.distributions.Weibull; both options viable, auton-survival
+      is canonical reference).
+   - Write models/dsm_fusion.py — DSMFusion(nn.Module) with 3 modality
+     heads + 1 mixture gate + DSM likelihood.
+   - Write test_dsm_fusion.py — shape checks, gradient flow, trivial-limit
+     check (K=1 reduces to single Weibull per modality), numerical
+     stability under extreme α/β.
+
+Phase 1  Wire into locked PF training loop  (Day 3-4)
+   - Create networks_dsm.py with PathgraphomicDSMNet (drop-in for
+     PathgraphomicNet, frozen encoders).
+   - Add `elif opt.mode == 'pathgraphomic_dsm'` to networks.py.
+   - Modify train_test.py at one site to dispatch to DSM loss when
+     opt.mode == 'pathgraphomic_dsm' (replaces CoxLoss).
+   - Alias 'pathgraphomic_dsm' in data_loaders.py (same as we did for
+     GRFN).
+   - Single-fold smoke train on GBMLGG fold 1: 5 epochs, verify training
+     runs, loss decreases, c-Index in reasonable range.
+
+Phase 2  Full 15-fold GBMLGG sweep  (Day 5-7)
+   - 30 epochs (locked PF protocol), GPU 2 + GPU 3 sharded.
+   - Wall-clock ETA ~12 hours.
+   - Output: 15 fold checkpoints + 15 fold prediction pkls.
+   - Aggregation: c-Index + IBS + IBLL paired against locked PF.
+   - Decision point: where does DSM's IBS land vs PF's 0.0971?
+
+Phase 3  KIRC cross-cohort  (Day 8-9)
+   - Same protocol on KIRC.
+   - Locked PF KIRC = 0.7184.
+
+Phase 4  GRFN companion experiment (full-likelihood)  (Day 10-12)
+   - Add Gaussian-on-log-time loss path to PathgraphomicGRFNNet.
+   - 15-fold GBMLGG re-train.
+
+Phase 5  Required ablations A1-A7 + writeup  (Day 13-21)
+   - K sweep (A1), cross-modality variant (A2), parametric form (A3),
+     modality lesions (A4), calibration battery (A5).
+   - Saturation paper integration.
+
+Total: ~3 weeks. Sits comfortably inside the TOMM August 31 deadline
+(currently ~14 weeks out).
+
+
+--------------------------------------------------------------------------------
+8. Honest probability assessment
+--------------------------------------------------------------------------------
+
+Pre-experiment priors (subject to update once Phase 2 c-Index comes in):
+
+  Outcome                                                  P
+  ---------------------------------------------------------------
+  c-Index delta vs PF on GBMLGG >= +0.012                  0.08
+  c-Index delta in [-0.005, +0.005] (statistical parity)   0.55
+  IBS delta vs PF on GBMLGG (DSM lower) >= 0.005           0.45
+  IBS delta on GBMLGG roughly equal to PF (Cox is fine?)   0.30
+  IBS delta on GBMLGG worse than PF (likelihood not the lever) 0.25
+  c-Index parity AND IBS gain (the "Narrative A" outcome)  0.30
+  c-Index parity AND IBS null (the saturation strongest)   0.25
+  c-Index parity AND IBS worse (mixture overfits)          0.20
+
+  P(publishable saturation-paper row): 1.00. All three outcomes (IBS
+  gain / IBS null / IBS worse) inform the three-lever framing.
+
+Failure modes to monitor in Phase 0/1:
+  - Weibull α collapses to the clamp boundaries (α → 0.5 or α → 5)
+    across all components. Diagnostic: histogram of α values per epoch.
+    Mitigation: lower the upper clamp, or use a Beta prior on α.
+  - Mixture weights w_{m,k}(x) collapse to one component (the GRFN-style
+    collapse failure mode). Diagnostic: per-epoch entropy of the
+    softmax(logits). If entropy → 0, add entropy regularisation.
+  - β scale explodes. Already clamped to 100; monitor for hits on the
+    upper boundary.
+  - DSM loss returns NaN. Most common cause: t_i = 0 in the data
+    (some patients censored at admission). Add small epsilon to t_i in
+    the log calculations.
+
+
+--------------------------------------------------------------------------------
+9. Differentiation from the user's prior interventions
+--------------------------------------------------------------------------------
+
+DSM-Pathomic is theoretically distinct from each of the prior 9 interventions
+on this baseline:
+
+  Prior intervention                       | Lever      | DSM differs because…
+  -----------------------------------------+------------+--------------------------------
+  GenoFiLM (pre_ln/residual/plain)         | Feature    | DSM is loss-side, not gating
+  GBT-Fusion (block-term Tucker)           | Feature    | Same
+  DAF (signed disagreement)                | Decision   | DSM produces full S(t|x), not a scalar disagreement
+  UNI2-h encoder upgrade                   | Encoder    | Different lever entirely
+  FiLM_residual replacement                | Feature    | Same as GenoFiLM
+  NoGateTrilinear                          | Feature    | Same
+  HACA (hazard-anchored attention)         | Attention  | Different lever
+  GRFN-Pathomic                            | Architecture (calibration channels) | Architecture under Cox; DSM is loss change
+
+DSM-Pathomic is the FIRST loss-function intervention in the user's
+9-experiment ladder. That makes it the saturation paper's loss-function row
+by construction.
+
+
+--------------------------------------------------------------------------------
+10. References
+--------------------------------------------------------------------------------
+
+Primary:
+  Nagpal, C., Li, X., Dubrawski, A. (2021).
+  "Deep Survival Machines: Fully Parametric Survival Regression and
+  Representation Learning for Censored Data with Competing Risks."
+  IEEE Journal of Biomedical and Health Informatics 25(8):3163-3175.
+  doi: 10.1109/JBHI.2021.3052441
+  arXiv: 2003.01176
+  Code: https://github.com/autonlab/auton-survival
+
+Extension to multimodal (cited in design survey):
+  Wen et al. "MMDCSM: Multi-Modal Deep Cox Survival Machines."
+  ICCVW 2025. (Alzheimer's MRI+CSF, not TCGA cancer survival.)
+
+Audit paper that motivated this experiment:
+  Ghawami. "Good Rankings, Wrong Probabilities: A Calibration Audit of
+  Multimodal Cancer Survival Models."  arXiv 2604.04239 (April 2026).
+  Reports: MCAT GBMLGG c-Index 0.817 but fails 1-calibration on all 5
+  folds. Recommends post-hoc Platt scaling. Identifies the Cox+concordance
+  loss as the calibration-incompatible objective.
+
+Cox baseline (locked):
+  Chen, R.J. et al. "Pathomic Fusion." IEEE TMI 41(4):757-770, 2022.
+  Locked replication: 0.8174 ± 0.0717 c-Index, 0.0971 ± 0.0103 IBS on
+  GBMLGG (this user, May 2026).
+
+GRFN-Pathomic falsification:
+  /home/sbarua/Region_based_segmentation/GRFN-Pathomic/gbmlgg/
+    CALIBRATION_RESULTS.pkl   (per-fold metrics, May 2026)
+    RESULTS_gbmlgg.txt        (c-Index Phase 2 result, May 2026)
+
+
+--------------------------------------------------------------------------------
+11. What DSM-Pathomic is NOT
+--------------------------------------------------------------------------------
+
+  - **Not a new architecture.** The DSM model is from Nagpal et al. 2021.
+    See §0.5 for the explicit novelty inventory.
+  - Not a c-Index headline play (P(meaningful gain) = 0.08).
+  - Not a replacement for the architectural saturation row. DSM tests the
+    LOSS lever; GRFN-Pathomic remains the saturation paper's architectural
+    row under Cox.
+  - Not an encoder upgrade (encoders remain locked).
+  - Not a fix for the GRFN calibration result. To prove the GRFN
+    architecture's calibration channels can work given a correct loss,
+    see the companion experiment (Section 6).
+  - Not MMDCSM as published. MMDCSM (Wen et al., ICCVW 2025) uses
+    cross-modality components (each component conditioned on all three
+    modalities). DSM-Pathomic's modality-specific components are an
+    incremental structural change for per-modality attribution; ablation
+    A2 (§5) recovers MMDCSM exactly.
+  - Not standalone-paper material. The novelty profile is too thin
+    (incremental config over MMDCSM). Its value is as the loss-function
+    row of the saturation paper, where the publishable contribution is
+    the experimental design, not this individual architecture.
+
+
+--------------------------------------------------------------------------------
+12. Decision-ready next step
+--------------------------------------------------------------------------------
+
+Phase 0 (~1-2 days):
+  - Install auton-survival into pathomic_fusion_replica/.venv:
+      $ pathomic_fusion_replica/.venv/bin/pip install auton-survival
+  - Write models/dsm_fusion.py + tests/test_dsm_fusion.py.
+  - Smoke test: shapes correct, gradient flows into all 4 heads,
+    DSM likelihood is finite under random init.
+
+After Phase 0 passes, Phase 1 is ~1-2 days (wire into PF training).
+Phase 2 (the 15-fold sweep) is ~12 hours wall-clock once kicked off.
+
+The earliest decision point: does DSM-Pathomic IBS on GBMLGG come in
+better than PF's 0.0971? That answers the loss-function-lever question
+within ~5-7 days of green light.
+
+================================================================================
+END  —  DSM_Pathomic_ARCHITECTURE.txt
+================================================================================

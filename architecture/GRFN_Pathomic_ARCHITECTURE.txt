@@ -1,0 +1,481 @@
+================================================================================
+GRFN-Pathomic — Gaussian Random Fuzzy Number Fusion for Pathomic Survival
+Architecture design document — 2026-05-17
+================================================================================
+
+Status: design only. No code yet. Pre-implementation review.
+
+Decision context: arrived at GRFN-Pathomic after (a) HACA-on-MCAT pilot on
+BLCA produced a clean saturation falsification (r_j spread + c-Index drop
+under Option-C), and (b) a Theoretically-Distinct Fusion Mechanisms survey
+ranked GRFN-Pathomic as the highest expected-information arm among
+remaining-to-try fusion families, given the user's TOMM Aug 31 deadline and
+the "Responsible and Explainable Multimodal Fusion" special-issue call.
+
+
+--------------------------------------------------------------------------------
+0. TL;DR  (one paragraph)
+--------------------------------------------------------------------------------
+GRFN-Pathomic replaces Pathomic Fusion's gated bilinear + Kronecker fusion
+block with a Gaussian-Random-Fuzzy-Number (GRFN) evidential combination rule
+in decision space. Each of the three modality embeddings (path, graph, omic)
+emits a fuzzy survival prediction (mean mu_i, aleatoric variance sigma^2_i,
+epistemic precision h_i) plus a learned reliability scalar r_i in [0,1]; the
+three predictions are combined via a closed-form weighted-evidence rule into
+a single (mu_f, sigma_f^2, h_f). The Cox partial likelihood is computed from
+mu_f. The model is roughly 60-fold smaller than PF's Kronecker block at the
+fusion stage (~600 new params vs ~36K-3.5M for PF's bilinear+Kronecker+
+encoders), produces native per-modality reliability attributions and
+per-prediction epistemic confidence as side outputs, and is theoretically
+distinct from every fusion mechanism in the user's prior 7-intervention list
+(gating, FiLM, Kronecker, attention, encoder-swap, disagreement-reconcili-
+ation, hazard-anchored attention). The publishable contribution is robust to
+c-Index outcome: even at flat c-Index, the calibration story (IBS, IBLL) and
+the r_i attribution story carry the TOMM submission on the explainability
+axis.
+
+
+--------------------------------------------------------------------------------
+1. Lineage of the idea
+--------------------------------------------------------------------------------
+
+Direct ancestor:
+  Huang, Quost, Denoeux et al.
+  "EsurvFusion: Evidential Survival Analysis via Gaussian Random Fuzzy
+  Numbers." IEEE TFS 34(1):76-88, 2026.
+  DOI: 10.1109/TFUZZ.2025.3623879   arXiv: 2412.01215v1
+  Code: not publicly released as of 2026-05-17.
+
+EsurvFusion is the published reference for GRFN-based survival fusion. Their
+implementation: 3 tabular inputs (clinical, omics, sometimes images-as-
+tabular), regression-style log-time targets, Brier score evaluation on
+HECKTOR2022, TCGA-BRCA, TCGA-BLCA, TCGA-COADREAD. Crucially, EsurvFusion
+does NOT evaluate on TCGA-GBMLGG or TCGA-KIRC — the exact cohorts where
+Pathomic Fusion has the locked baseline.
+
+What GRFN-Pathomic does NOT inherit from EsurvFusion:
+  - tabular preprocessing (we keep PF's locked 32-d learned modality embeddings)
+  - regression-style endpoint (we use Cox partial likelihood, matching PF)
+  - Brier-score-only evaluation (we report c-Index + IBS + IBLL together)
+  - GBMLGG and KIRC are open ground (no GRFN baseline exists)
+
+What GRFN-Pathomic adds beyond EsurvFusion:
+  - First Cox-partial-likelihood reformulation of the GRFN combination rule
+  - First TCGA-GBMLGG and TCGA-KIRC GRFN-style numbers
+  - Built on PF's frozen 32-d encoders → fusion-only contribution is isolated
+  - r_i sweep + h_i ablation as primary explainability experiments
+
+
+--------------------------------------------------------------------------------
+2. Mathematical specification
+--------------------------------------------------------------------------------
+
+2.1  Notation
+   x  = (x_path, x_graph, x_omic)  — patient input
+   h_p, h_g, h_o ∈ R^32  — locked PF modality embeddings (NOT retrained)
+   K = 3   — number of modalities
+   N      — training-batch size
+   t_i, delta_i  — survival time and event indicator for patient i
+
+2.2  Per-modality fuzzy survival prediction
+
+For each modality m ∈ {p, g, o}, a small MLP-free linear head emits three
+scalars:
+
+   [mu_m, lsv_m, lh_m] = Linear_m(h_m)            shape (3,)
+   sigma_m^2 = exp(lsv_m)                          aleatoric variance > 0
+   h_m       = exp(lh_m)                           epistemic precision > 0
+   mu_m                                            survival-risk mean (real)
+
+The per-modality fuzzy prediction is the Gaussian Random Fuzzy Number
+(Denoeux, IFSA 2009; Huang et al., IEEE TFS 2026):
+
+   Y_m ~ GRFN(mu_m, sigma_m^2, h_m)
+
+with membership function (Eq. 3 of arXiv 2412.01215v1):
+
+   Y^_m(t) = exp[ -(h_m / 2) * (t - mu_m)^2 ]
+
+The scalar mu_m plays the role of a "modality-specific Cox risk."
+
+2.3  Learned modality reliability
+
+A separate Linear head, taking the concatenation of all three modality
+embeddings, emits three logits:
+
+   [s_p, s_g, s_o] = Linear_r(concat(h_p, h_g, h_o))      shape (3,)
+   r_m = sigmoid(s_m)                                       reliability ∈ (0, 1)
+
+r_m is a learned, *per-patient* scalar that discounts modality m's
+contribution. This is the Dempster-Shafer-style discounting (Shafer 1976;
+Denoeux 2008). It is the model's first-class explainability output —
+analogous to attention weights in MCAT, but with a probabilistic semantics
+(reliability is calibrated against the GRFN combination rule, not learned
+purely to maximise loss).
+
+2.4  GRFN combination rule  (Eq. 4 of arXiv 2412.01215v1)
+
+Let r_m h_m  be the *discounted precision* of modality m:
+
+   h_f       = Σ_m  r_m h_m                                 epistemic confidence in fused prediction
+   mu_f      = ( Σ_m  r_m h_m mu_m )  /  ( Σ_m  r_m h_m )    fused risk
+   sigma_f^2 = ( Σ_m  r_m^2  h_m^2  sigma_m^2 )  /  ( Σ_m  r_m h_m )^2
+                                                            propagated aleatoric variance
+
+This is a closed-form, differentiable, parameter-free combination rule —
+not a learned fusion block. All inductive bias is in the rule.
+
+Special cases:
+   r_m ≡ 1  →   precision-weighted mean of mu_m (Bayesian mixture)
+   h_m ≡ 1  →   reliability-weighted mean of mu_m (Dempster-Shafer mixture)
+   r_m ≡ 1, h_m ≡ 1  →  uniform mean of mu_m (trivial late fusion)
+
+The three special cases are required ablations (section 5 below).
+
+2.5  Cox partial likelihood
+
+Train mu_f as the Cox risk:
+
+   L_Cox  =  - Σ_{i : delta_i = 1}  [ mu_f(x_i)  -  log Σ_{j : t_j ≥ t_i}  exp(mu_f(x_j)) ]
+
+No mixture, no NLL, no Weibull — exactly the same Cox loss PF already uses
+in train_test.py:61 (CoxLoss(survtime, censor, pred, device)).
+
+2.6  Side outputs (for downstream explainability + calibration)
+
+For each patient at inference time the model emits:
+   - mu_f       (Cox risk)
+   - sigma_f^2  (aleatoric variance — disagreement of modality means)
+   - h_f        (epistemic confidence — sum of discounted precisions)
+   - r_p, r_g, r_o  (per-patient per-modality reliability ∈ [0,1])
+
+These are reported alongside c-Index in all tables.
+
+
+--------------------------------------------------------------------------------
+3. Where it sits in the locked Pathomic Fusion pipeline
+--------------------------------------------------------------------------------
+
+PF pipeline (from /home/sbarua/Region_based_segmentation/pathomic_fusion_replica/
+PathomicFusion/fusion.py:57-123 — TrilinearFusion_A):
+
+   x_path   → VGG  → h_p ∈ R^32                                LOCKED
+   x_graph  → GCN  → h_g ∈ R^32                                LOCKED
+   x_omic   → SNN  → h_o ∈ R^32                                LOCKED
+
+   ↓  bilinear gating (3 × nn.Bilinear)                        REPLACED
+   ↓  three gated outputs o1, o2, o3 ∈ R^33                    REPLACED
+   ↓  Kronecker product (o1 ⊗ o2 ⊗ o3) ∈ R^{33×33×33}          REPLACED
+   ↓  encoder1: Linear(35937 → 96) + ReLU + Dropout            REPLACED
+   ↓  skip-concat with (o1, o2, o3)                            REPLACED
+   ↓  encoder2: Linear(96+skip → 96) + ReLU + Dropout          REPLACED
+   ↓  classifier: Linear(96 → 1)                               REPLACED
+
+   ↓  Cox loss on the scalar risk                              KEPT
+
+GRFN-Pathomic pipeline:
+
+   x_path   → VGG  → h_p ∈ R^32                                LOCKED (same as PF)
+   x_graph  → GCN  → h_g ∈ R^32                                LOCKED (same as PF)
+   x_omic   → SNN  → h_o ∈ R^32                                LOCKED (same as PF)
+
+   ↓  Linear_p(h_p) → (mu_p, lsv_p, lh_p)   ∈ R^3              NEW (32×3 + 3 = 99 params)
+   ↓  Linear_g(h_g) → (mu_g, lsv_g, lh_g)   ∈ R^3              NEW (99 params)
+   ↓  Linear_o(h_o) → (mu_o, lsv_o, lh_o)   ∈ R^3              NEW (99 params)
+   ↓  Linear_r(cat(h_p,h_g,h_o)) → (s_p,s_g,s_o) ∈ R^3        NEW (96×3 + 3 = 291 params)
+   ↓  r_m = sigmoid(s_m),  h_m = exp(lh_m),  sigma_m^2 = exp(lsv_m)
+   ↓  GRFN combination rule (closed-form, parameter-free)      NEW (0 params)
+   ↓  scalar risk = mu_f
+
+   ↓  Cox loss on mu_f                                         KEPT (PF's existing CoxLoss)
+
+Encoder block stays exactly as in the locked PF replication (VGG 1024×1024-ROI
+CNN, graph CNN, SNN over 240 genes). No retraining of the encoders.
+
+
+--------------------------------------------------------------------------------
+4. Parameter count comparison
+--------------------------------------------------------------------------------
+
+Pathomic Fusion (TrilinearFusion_A, fusion.py:57-123) — params in the fusion+
+classifier block only (encoders excluded):
+
+   linear_h1/h2/h3            : 3 × (32×32 + 32)             ≈ 3,168
+   linear_z1/z2/z3 (bilinear) : 3 × (32×32×32 + 32)          ≈ 98,400   ← the big bilinear gates
+   linear_o1/o2/o3            : 3 × (32×32 + 32)             ≈ 3,168
+   encoder1: Linear(35937 → 96)+bias                          ≈ 3,449,952  ← dominant cost
+   encoder2: Linear(195 → 96)+bias                            ≈ 18,816
+   classifier: Linear(96 → 1)+bias                            ≈ 97
+                                                              ─────────
+                                                              ≈ 3,573,601 params
+
+GRFN-Pathomic — fusion+classifier params:
+
+   Linear_p, Linear_g, Linear_o (each 32 → 3, with bias)      : 3 × 99 = 297
+   Linear_r (96 → 3, with bias)                                : 291
+   GRFN combination rule                                       : 0   (closed form)
+   No separate classifier — mu_f IS the risk                  : 0
+                                                              ─────────
+                                                              ≈ 588 params
+
+GRFN-Pathomic fusion block is ~6,080× smaller than PF's fusion+encoder block.
+This is genuine architectural simplification, not merely an extension.
+
+
+--------------------------------------------------------------------------------
+5. Required ablations (each is a saturation-paper row)
+--------------------------------------------------------------------------------
+
+A1.  Set r_m ≡ 1 for all m  (no reliability discounting).
+     Tests whether learned reliability matters at all. If A1 ≈ default,
+     the r_i story is dead and the publishable contribution shifts.
+
+A2.  Set h_m ≡ 1 for all m  (uniform epistemic precision).
+     Reduces fusion to a reliability-weighted mean of mu_m. Tests whether
+     the GRFN-specific precision channel adds anything beyond DS mixture.
+
+A3.  Single-modality lesion runs:
+        - drop h_p (set Linear_p output to zero, freeze)
+        - drop h_g
+        - drop h_o
+     Observe how r_m for the remaining modalities saturates. Confirms that
+     r_i is actually a reliability indicator, not a learned bias.
+
+A4.  Permutation-feature-importance audit on r_m.
+     For each modality, shuffle its h_m embedding across the batch and
+     measure the drop in c-Index. Compare with r_m's average value.
+     A monotone relationship between (1 - average r_m) and shuffle-induced
+     c-Index drop would be the headline attribution result.
+
+A5.  Calibration audit on the GBMLGG hold-out:
+        - Integrated Brier Score (IBS)
+        - Integrated Binomial Log-Likelihood (IBLL)
+        - 1-calibration plots stratified by predicted risk quintile
+     This is the TOMM-aligned headline measurement — IBS gains carry the
+     submission even at flat c-Index.
+
+A6.  Sigma_f^2 utility check (post-hoc; uses fixed weights from A5 run):
+     Sort patients by sigma_f^2; report whether high-sigma patients are
+     systematically harder to predict (longer survival residuals, lower
+     individual c-Index contribution). Direct evidence that sigma_f^2
+     captures aleatoric uncertainty in a meaningful way.
+
+A7.  h_f utility check (post-hoc):
+     Sort patients by h_f; report whether low-h_f (low epistemic
+     confidence) patients have higher prediction error. Direct evidence
+     of epistemic-confidence calibration.
+
+
+--------------------------------------------------------------------------------
+6. Implementation plan
+--------------------------------------------------------------------------------
+
+Phase 0  — code stub + smoke test (1 day)
+  - Create models/grfn_fusion.py with class GRFNFusion(nn.Module).
+  - Verify forward returns (mu_f, sigma_f^2, h_f, r) with correct shapes
+    on dummy 32-d inputs.
+  - Verify gradient flow: each modality head receives gradient, reliability
+    head receives gradient, no NaN/Inf.
+
+Phase 1  — wire into the locked PF training loop (1-2 days)
+  - In options.py, add fusion choice 'grfn' alongside the existing options.
+  - In train_test.py, branch on opt.fusion_type:
+        if opt.fusion_type == 'grfn':
+            model = build_grfn_model(opt)
+        else:
+            model = build_pathomic_model(opt)  # existing
+  - Cox loss path uses pred = mu_f.
+  - Keep all other training hyperparameters identical to the locked PF
+    replication (lr, weight decay, epochs, batch size, lambda_cox, etc.).
+
+Phase 2  — paired-seed evaluation on GBMLGG (1 day)
+  - 15-fold CV (PF's published split protocol).
+  - 3 seeds per fold (matches the 270-paired-run convention used in the
+    saturation paper for prior interventions).
+  - Output: 45-run c-Index distribution, paired against the locked PF
+    baseline at the same fold/seed pairs.
+  - Statistical tests: paired t-test, Wilcoxon signed-rank, win-count.
+
+Phase 3  — KIRC cross-cohort confirmation (1 day)
+  - Same protocol on KIRC. Locked PF KIRC = 0.7184.
+  - Cross-cohort consistency check.
+
+Phase 4  — ablations A1-A7 (3-5 days, mostly unattended)
+  - Each ablation reuses the Phase 2/3 infrastructure.
+  - Ablation rows go directly into the saturation paper table.
+
+Phase 5  — writeup (2-3 days)
+  - Add GRFN-Pathomic row to saturation paper.
+  - Calibration story + r_m attribution as the publishable contribution.
+
+Total budget: ~10-12 working days, plus unattended GPU time. Sits cleanly
+inside the Aug 31 TOMM deadline.
+
+
+--------------------------------------------------------------------------------
+7. Honest probability assessment (carried over from the design survey)
+--------------------------------------------------------------------------------
+
+Outcome                                   Probability
+─────────────────────────────────────────────────────
+c-Index Δ ≥ +0.012 on GBMLGG              ≈ 0.12
+c-Index Δ ≥ +0.005 on GBMLGG              ≈ 0.30
+Clean informative null (Δ ∈ [−0.005, +0.005]
+  with publishable calibration / r_i story) ≈ 0.60
+Architectural pathology
+  (r_m collapse → all-equal weights, h_m
+  collapse → all-equal precision)         ≈ 0.15
+80% CI for Δ c-Index on GBMLGG            [−0.010, +0.020]
+
+The expected value of this experiment is in the calibration + attribution
+story, NOT in the c-Index gain. P(meaningful calibration improvement at flat
+c-Index | Δ c-Index ∈ [−0.005, +0.005]) is high (≈ 0.55) because the GRFN
+combination rule produces calibrated uncertainty natively, regardless of
+mean accuracy.
+
+The dominant failure mode to watch for during training:
+  - r_m collapse: all three r_m → same value (typically near 0.5 or near 1).
+    In that case the discounting story is dead. Mitigation: log r_m
+    distribution every epoch (same diagnostic pattern as HACA's r_j
+    distribution logging in haca_train_utils.py). If r_m collapse happens,
+    A1 (set r_m ≡ 1) and the resulting numbers will be statistically
+    indistinguishable from the default — that itself is publishable.
+
+  - h_m collapse: all three h_m → same value. Less serious than r_m
+    collapse because the combination rule still weights by precision; but
+    it removes the per-modality epistemic-confidence signal. A2 (set h_m
+    ≡ 1) controls for this.
+
+
+--------------------------------------------------------------------------------
+8. Differentiation from the user's 7 prior interventions
+--------------------------------------------------------------------------------
+
+Prior intervention                       | Family                       | GRFN-Pathomic distinct because…
+─────────────────────────────────────────┼──────────────────────────────┼──────────────────────────────────────────────────────────────────
+1. GenoFiLM (pre_ln/residual/plain)      | Feature-level multiplicative | GRFN operates in decision space (mu_f), not feature space.
+                                         | gating                       | No FiLM-style multiplicative interaction in the fusion block.
+2. GBT-Fusion (block-term Tucker)        | Low-rank tensor decomposition| Same axis as PF's Kronecker; GRFN replaces the tensor product
+                                         |                              | with a closed-form combination rule, not a low-rank approx.
+3. DAF (signed disagreement)             | Decision-level disagreement  | DAF emits a signed disagreement scalar with no calibration
+                                         | reconciliation               | semantics. GRFN emits CALIBRATED reliability r_m and
+                                         |                              | epistemic precision h_m. Different objects.
+4. UNI2-h encoder swap                   | Encoder upgrade              | GRFN-Pathomic keeps the locked VGG/GCN/SNN encoders. The
+                                         |                              | contribution is in fusion, not encoders.
+5. FiLM_residual replacement             | Feature-level gating variant | Same family as #1.
+6. NoGateTrilinear                       | Trilinear bilinear-free      | Same Kronecker space, different gating choice.
+7. HACA (hazard-anchored attention)      | Attention with survival bias | HACA modulates a softmax bias; GRFN has no attention at all.
+                                         |                              | HACA Option-C (BLCA) gave Δ = −0.0189, falsifying the
+                                         |                              | "attention is the bottleneck" hypothesis. GRFN tests an
+                                         |                              | orthogonal question: does evidential decision-level fusion
+                                         |                              | break the saturation ceiling?
+
+GRFN-Pathomic spans neither feature-level multiplicative interactions, low-
+rank tensor decompositions, decision-level disagreement scalars, encoder
+upgrades, attention biasing, nor block-term decompositions. It is a new
+axis (decision-level evidential combination with intrinsic per-modality
+reliability + epistemic precision).
+
+
+--------------------------------------------------------------------------------
+9. References (verified peer-reviewed unless flagged)
+--------------------------------------------------------------------------------
+
+Direct ancestor:
+  Huang, Quost, Denoeux, et al.
+  "EsurvFusion: Evidential Survival Analysis via Gaussian Random Fuzzy
+  Numbers." IEEE Transactions on Fuzzy Systems 34(1):76-88, 2026.
+  doi: 10.1109/TFUZZ.2025.3623879
+  arXiv: 2412.01215v1
+  (Final IEEE TFS version is paywalled; numbers in this design doc are from
+  arXiv v1.)
+
+Theoretical foundation:
+  Denoeux, T.
+  "Reasoning with imprecise belief structures."
+  International Journal of Approximate Reasoning 20(1):79-111, 1999.
+
+  Denoeux, T.
+  "Conjunctive and disjunctive combination of belief functions induced by
+  non-distinct bodies of evidence."
+  Artificial Intelligence 172(2-3):234-264, 2008.
+
+Direct baseline:
+  Chen, R. J., Lu, M. Y., Wang, J., Williamson, D. F. K., Rodig, S. J.,
+  Lindeman, N. I., & Mahmood, F. (2022).
+  "Pathomic Fusion: An Integrated Framework for Fusing Histopathology and
+  Genomic Features for Cancer Diagnosis and Prognosis."
+  IEEE Transactions on Medical Imaging 41(4):757-770.
+  Code: https://github.com/mahmoodlab/PathomicFusion
+
+  Locked replication of this baseline: 0.8174 c-Index on TCGA-GBMLGG;
+  0.7184 c-Index on TCGA-KIRC (this user, May 2026; see
+  /home/sbarua/Region_based_segmentation/pathomic_fusion_replication_results.txt)
+
+Related but theoretically distinct:
+  Luo, Y. et al. "M2EF-NNs: ..." Scientific Reports, 2025. arXiv 2408.04170.
+  (Dempster-Shafer fusion bundled with ViT encoder + co-attention front-end —
+  the fusion-only contribution is not isolated, unlike this work.)
+
+  Han, Z. et al. "Trusted Multi-View Classification."  ICLR 2021. arXiv
+  2102.02051. (Dempster-Shafer at decision level; not survival; not Cox-PH.)
+
+Saturation evidence backing this experiment:
+  Swift, Ye, O'Reilly.
+  "InterSHAP-Cox: A causal-attribution audit of multimodal survival
+  models on TCGA glioma." arXiv 2603.29977, 2026.
+  (Reports cross-modal interaction variance band 3.0%-4.8% across glioma
+  survival architectures spanning c-Index 0.64 → 0.82. This is the data-
+  level ceiling that all our fusion interventions, including this one, must
+  respect or break.)
+
+  This user's 270+ paired-seed null-or-near-null runs across 7 prior
+  fusion interventions. See:
+    /home/sbarua/Region_based_segmentation/full_status_2026-05-13.txt
+    /home/sbarua/Region_based_segmentation/genofilm_status_2026-05-10.txt
+    /home/sbarua/Region_based_segmentation/mcat_replication/haca/
+        HACA_RESULTS_INTERIM.txt
+
+Theoretically-distinct-fusion survey (2026-05-17, basis for picking GRFN
+over OGM, DSM, HyPF, etc.):
+  /home/sbarua/paper/sgementation paper/regon based segmentation/
+    Theoretically-Distinct Fusion Mechanisms for Pathomic Survival
+    Prediction_ A Saturation-Aware Survey.pdf
+
+
+--------------------------------------------------------------------------------
+10. What this document is NOT
+--------------------------------------------------------------------------------
+
+  - Not a paper draft. The saturation paper's GRFN row will be 1-2
+    paragraphs + 1 row in the comparison table + a calibration sub-section.
+  - Not a final hyperparameter sweep. Phase 1's first run uses learning
+    rate, weight decay, batch size, epochs identical to the locked PF
+    replication. Hyperparameter tuning of the r-head / h-head is deferred.
+  - Not an EsurvFusion clone. We use Cox partial likelihood (PF-style), not
+    Brier-score regression (EsurvFusion-style). The Cox-compatible refor-
+    mulation of the GRFN combination rule is the single most important
+    novelty claim and must be locked down in the writeup explicitly.
+  - Not a replacement of the encoders. The 32-d VGG/GCN/SNN encoders that
+    locked the PF replication at 0.8174 GBMLGG / 0.7184 KIRC stay frozen.
+    Fusion contribution is isolated.
+
+
+--------------------------------------------------------------------------------
+11. Decision-ready next step
+--------------------------------------------------------------------------------
+
+Phase 0 (code stub + smoke test) takes one day. The earliest decision point
+is "does the smoke test reproduce the locked PF result when r_m ≡ 1, h_m ≡ 1,
+mu_f = mean(mu_p, mu_g, mu_o)?" — i.e. does the model degenerate to
+late-mean fusion at the trivial limit. If yes, the implementation is
+correct. If no, debug the GRFN combination implementation before any real
+training.
+
+After Phase 0 passes, Phase 1 (wire-into-training) is ~1 day. Phase 2 (full
+GBMLGG paired-seed run) is ~6 GPU-hours on 4 L40s. The first real number
+should arrive within ~2-3 calendar days of greenlight.
+
+================================================================================
+END  —  GRFN_Pathomic_ARCHITECTURE.txt
+================================================================================

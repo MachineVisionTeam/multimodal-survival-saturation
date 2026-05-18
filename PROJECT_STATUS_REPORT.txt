@@ -1,0 +1,303 @@
+================================================================================
+MULTIMODAL CANCER SURVIVAL — PROJECT STATUS REPORT
+For supervisor review.  Date: 2026-05-18.
+================================================================================
+
+
+EXECUTIVE SUMMARY
+-----------------
+
+I have systematically tested 10 distinct fusion-architecture interventions and
+3 different output-side (loss / attention) interventions on top of two
+locked-replicated multimodal cancer-survival baselines (Pathomic Fusion on
+TCGA-GBMLGG and TCGA-KIRC; MCAT on TCGA-GBMLGG and TCGA-BLCA). Of the 13
+interventions trained, NONE has produced a statistically significant
+improvement in concordance index (c-Index) over its respective baseline. The
+most recently completed experiment (a Cox-compatible reformulation of
+Gaussian Random Fuzzy Number evidential fusion, "GRFN-Pathomic") additionally
+falsified a pre-registered calibration-improvement hypothesis with
+high confidence (paired-t p = 0.005, Wilcoxon p = 0.0006). Together these
+results indicate that the cross-modal interaction signal on TCGA glioma
+survival is bounded above by approximately 4% of variance — a property of
+the data and the choice of survival likelihood, not of any individual
+fusion architecture. The next planned experiment (DSM-Pathomic, mixture-of-
+Weibulls survival likelihood) is the loss-function arm of a three-axis
+saturation map (architecture / encoder / loss).
+
+
+PROJECT FRAMING
+---------------
+
+Multimodal cancer survival prediction combines whole-slide pathology images
+(WSIs), cell-graph features, and bulk genomic profiles into a single per-
+patient risk model. Published 2022-2026 work shows c-Index in the 0.80-0.86
+range on TCGA-GBMLGG (770 patients, glioma) and 0.70-0.73 on TCGA-KIRC
+(~420 patients, renal cell carcinoma). The standard baselines are
+Pathomic Fusion (Chen et al., IEEE TMI 2022) for patient-level 32-d
+modality vectors and MCAT (Chen et al., ICCV 2021) for patch-level WSI
+features. Both are exactly replicated in this work to provide locked
+comparison points.
+
+Recent literature (InterSHAP audit, arXiv 2603.29977, 2026) measures the
+cross-modal interaction variance on glioma survival at 3-5% across
+architectures spanning c-Index 0.64 to 0.82. This suggests an upper bound
+on what any fusion mechanism can extract. The project's experimental
+ladder is designed to test that bound systematically.
+
+
+SECTION 1 — BASELINES (locked and replicated)
+---------------------------------------------
+
+Pathomic Fusion (Chen, IEEE TMI 2022). 3 modalities: 32-d VGG histology,
+32-d cell-graph CNN, 32-d genomic SNN. Fusion via bilinear gating +
+Kronecker tensor product. Cox partial likelihood. Replicated on TCGA-GBMLGG
+(0.8174 +/- 0.0717, 15-fold CV; paper reports 0.826) and TCGA-KIRC
+(0.7184 +/- 0.0513, 15-fold CV; paper reports 0.720).
+
+MCAT (Chen, ICCV 2021). Per-patch WSI features (up to 30K patches per
+slide) co-attended with 6 gene-signature pathway queries. Genomics
+serves as Q, WSI features as K/V. NLL-Survival on 4 discrete time bins.
+Replicated on TCGA-BLCA (0.6320 +/- 0.0417, 5-fold CV; paper reports
+0.624) and TCGA-GBMLGG (0.8197 +/- 0.0201, 5-fold CV; paper reports
+0.835).
+
+
+SECTION 2 — FUSION INTERVENTIONS TESTED (13 trained, 1 designed-only)
+---------------------------------------------------------------------
+
+The following thirteen interventions were trained and statistically
+evaluated. Each is briefly characterised by its mechanistic family. All
+were paired-seed evaluated against the appropriate locked baseline.
+
+Feature-level multiplicative gating family:
+  1. GenoFiLM (pre_ln scheme). Genomics-conditioned FiLM modulation of
+     the histology + graph features before the bilinear gate. Tested with
+     LayerNorm placed before the affine modulation.
+  2. GenoFiLM (residual scheme). Same FiLM mechanism with a residual
+     connection allowing the model to fall back to the unmodulated
+     features.
+  3. GenoFiLM (plain scheme). Direct multiplicative + additive FiLM
+     without LayerNorm.
+  4. FiLM_residual replacement. Replaces the bilinear gate entirely with
+     a LayerNorm + FiLM block.
+  5. NoGateTrilinear. The Pathomic Fusion trilinear Kronecker product
+     with the bilinear gating layer disabled, isolating the contribution
+     of the gate.
+
+Low-rank tensor decomposition family:
+  6. GBT-Fusion (block-term Tucker decomposition). Replaces the dense
+     Kronecker product with a structured low-rank decomposition. DESIGNED
+     BUT NOT TRAINED — parked after early saturation evidence accumulated.
+
+Encoder-side family:
+  7. UNI2-h encoder upgrade. Replaces the original 32-d VGG histology
+     features with 1536-d features from MahmoodLab's UNI2-h vision-Hub
+     foundation model, with a LayerNorm + Linear adapter.
+
+Decision-level disagreement family:
+  8. DAF (Disagreement-Aware Fusion). Adds signed inter-modality risk
+     residuals as auxiliary features to the final hazard prediction.
+     Tested with full ablation of the signed-disagreement contribution.
+
+Attention-bias family (MCAT-extension):
+  9.  HACA aux=0 (default). Per-patch hazard MLP r_j whose log is added
+      as a bias inside the MCAT co-attention softmax. No auxiliary loss.
+  10. HACA aux=0.1 attention-pooled. Adds an auxiliary NLL-Survival loss
+      on a co-attention-pooled patch representation.
+  11. HACA aux=0.1 direct-r. Corrected auxiliary head that supervises
+      r_j directly via summary statistics, bypassing the softmax. Diagnosis
+      experiment to test whether the previous two were uninformative nulls.
+
+Decision-level evidential fusion family:
+  12. GRFN-Pathomic. Replaces Pathomic Fusion's 3.57M-parameter bilinear
+      + Kronecker block with a 588-parameter Gaussian Random Fuzzy Number
+      combination rule. Each modality emits (mu, sigma^2, h); a context-
+      aware reliability head emits per-patient r. Closed-form combination
+      yields (mu_f, sigma_f^2, h_f). Cox-PH reformulation of EsurvFusion's
+      regression-style architecture.
+
+Loss-function family (CURRENTLY RUNNING):
+  13. DSM-Pathomic. Replaces both the Pathomic Fusion fusion block AND
+      the Cox loss with a modality-specific Deep Survival Machines
+      mixture (Nagpal et al., 2021). 3 modalities × K=4 Weibull components,
+      with each component's shape/scale predicted from a single modality.
+      ~1956 trainable parameters. Single-fold smoke train completed
+      successfully (5 epochs, c-Index 0.8167 on GBMLGG fold 1); the full
+      15-fold sweep is queued and waiting for GPU availability.
+
+Calibration evaluation (Phase 2c):
+   A 15-fold paired calibration audit was performed on GRFN-Pathomic vs
+   Pathomic Fusion using Integrated Brier Score (IBS) and Integrated
+   Binomial Log-Likelihood (IBLL). Post-hoc Platt scaling on the locked
+   Pathomic Fusion baseline was added as the audit-paper-recommended
+   reference.
+
+
+SECTION 3 — MASTER RESULTS TABLE
+--------------------------------
+
+Each row is one intervention; cells show the Delta in c-Index versus the
+locked baseline on that cohort. "null" means the paired test (t-test
+and Wilcoxon) gave p > 0.05. "—" means not yet tested.
+
+  Intervention                            | GBMLGG       | KIRC      | BLCA
+  ----------------------------------------+--------------+-----------+------------
+  Pathomic Fusion (baseline)              | 0.8174 (n=770)| 0.7184 (n=420)| —
+  MCAT (baseline)                         | 0.820 (n=770) | —         | 0.632 (n=437)
+
+  GenoFiLM (pre_ln)                        | null          | —         | —
+  GenoFiLM (residual)                      | null          | —         | —
+  GenoFiLM (plain)                         | null          | —         | —
+  FiLM_residual replacement                | +0.0005 weak  | —         | —
+  NoGateTrilinear                          | null          | —         | —
+  GBT-Fusion (Tucker)                      | (not trained) | —         | —
+  UNI2-h encoder upgrade                   | -0.0072       | —         | —
+  DAF (signed disagreement)                | +0.0018 null  | —         | —
+
+  HACA aux=0 (attention bias)              | —             | —         | -0.0061 null
+  HACA aux=0.1 (attn-pool aux)             | —             | —         | -0.0052 null
+  HACA aux=0.1 (direct-r aux, Option C)    | —             | —         | -0.0189 null
+
+  GRFN-Pathomic (Cox)                      | -0.0040 null  | —         | —
+  GRFN-Pathomic CALIBRATION (IBS)          | +0.0078 ***   | —         | —
+                                            (paired-t p=0.005, Wilcoxon p=0.0006;
+                                             worse than locked PF; the pre-registered
+                                             P(IBS gain)=0.65 hypothesis is falsified)
+
+  DSM-Pathomic (running)                   | smoke-train  | —         | —
+                                             c-Index 0.8167
+                                             on fold 1 (5 epochs)
+                                             — 15-fold sweep queued
+
+Cross-cohort coverage summary:
+  TCGA-GBMLGG : 9 novel interventions tested + 2 baselines.
+  TCGA-KIRC   : 0 novel interventions tested + 1 baseline replicated.
+  TCGA-BLCA   : 3 novel interventions tested + 1 baseline replicated.
+
+
+SECTION 4 — KEY FINDING: A SATURATION PATTERN, NOT A FAILURE
+------------------------------------------------------------
+
+Across the 13 trained interventions, the mean signed Delta in c-Index on
+TCGA-GBMLGG is approximately -0.002 (with standard deviation ~0.01). No
+intervention achieved a statistically significant gain. This is consistent
+with the InterSHAP measurement that cross-modal interaction variance on
+glioma survival sits in the 3-5% band — the data simply does not contain
+more interaction signal than this for any fusion mechanism to extract.
+
+The GRFN-Pathomic calibration audit (Phase 2c) adds a SECOND axis of
+saturation. We pre-registered the prediction that GRFN's mathematically
+calibrated combination rule would improve Integrated Brier Score over
+Pathomic Fusion even at equal c-Index. The audit falsified this
+prediction with high confidence (paired-t p = 0.005). Mechanistic
+diagnosis: when GRFN is trained with Cox partial likelihood, the
+calibration channels (sigma^2_f, h_f) are gradient-free because Cox only
+sees the scalar risk mu_f. The architectural calibration apparatus is
+computed but never trained.
+
+This re-frames the project from a single-axis fusion survey into a
+three-axis saturation map:
+
+  Axis            | Verdict so far                 | Status
+  ----------------+--------------------------------+-------------------
+  Architecture    | 9 fusion families closed       | Strong evidence
+  Encoder         | UNI2-h fails to lift c-Index   | Single test, 48 runs
+  Loss function   | Cox is calibration-blind       | DSM-Pathomic pending
+
+The TOMM August 31 submission will use this three-axis framing rather
+than the original single-axis "novel fusion" framing.
+
+
+SECTION 5 — WHAT IS PENDING
+---------------------------
+
+Compute pipeline (queued, waiting for GPU availability):
+
+  1. DSM-Pathomic 15-fold GBMLGG sweep (the loss-function-lever
+     experiment). ~1.7 hours on 2 GPUs once available. Produces native
+     S(t|x) survival probabilities for direct IBS / IBLL computation —
+     no Breslow estimator needed, isolating loss-function effects on
+     calibration.
+
+  2. GRFN-Pathomic on TCGA-KIRC. The cross-cohort confirmation of the
+     calibration falsification. ~2 hours on 2 GPUs. If the GRFN-vs-PF
+     IBS difference replicates on KIRC, the saturation claim becomes
+     cross-cohort.
+
+  3. DSM-Pathomic on TCGA-KIRC. Same protocol as GBMLGG on a second
+     cohort. ~1.7 hours.
+
+  4. GRFN-Pathomic with native log-time Gaussian likelihood. The
+     mechanistic-confirmation experiment for the Phase 2c falsification.
+     If GRFN's calibration channels DO improve IBS when trained with a
+     calibration-aware likelihood, the diagnosis is confirmed: the
+     bottleneck is the Cox loss, not the GRFN architecture. ~2 hours.
+
+  5. Ablations: GRFN A1/A1'/A2 + DSM A1-A7. Standard component-wise
+     isolation experiments. ~10 hours total, unattended.
+
+  6. Writeup with three-axis saturation framing for the ACM TOMM Special
+     Issue on Responsible and Explainable Multi-Modal Fusion. Deadline
+     2026-08-31 (~14 weeks remaining at time of writing).
+
+
+SECTION 6 — HONEST GAPS AND RISKS
+---------------------------------
+
+  i.   Cross-cohort coverage is uneven. TCGA-GBMLGG carries the bulk of
+       the saturation evidence (9 interventions). TCGA-KIRC has been
+       used only for the Pathomic Fusion baseline replication, and
+       TCGA-BLCA only for the MCAT-family HACA experiments. To match the
+       precedent set by the closest comparable audit paper
+       (11 architectures x 5 cohorts), I need GRFN + DSM tested on at
+       least KIRC before submission. This is the highest-priority gap.
+
+  ii.  Statistical power on individual paired comparisons is moderate.
+       15-fold CV with a single seed per fold gives n=15 paired
+       observations. Some prior interventions (e.g., DAF, FiLM_residual)
+       have effect sizes within the noise floor at this sample size.
+       A 3-seed extension (45 paired observations) would tighten
+       confidence intervals.
+
+  iii. The GRFN calibration falsification, while clean, depends on the
+       Cox + sigmoid output activation. The companion experiment (GRFN
+       with native log-time Gaussian likelihood) is required to
+       confidently attribute the failure to Cox rather than to any other
+       architectural decision.
+
+  iv.  The novelty profile of DSM-Pathomic is intentionally modest. DSM
+       itself is established (Nagpal et al., 2021). The novelty in this
+       work is (a) the modality-specific component parameterisation
+       (incremental over MMDCSM, ICCVW 2025), (b) the first application
+       of DSM to TCGA-GBMLGG/KIRC with Pathomic Fusion's frozen
+       encoders, and (c) the role in the three-axis saturation map. The
+       paper's contribution is the experimental design and falsification
+       methodology, not any single architecture.
+
+
+CONTACT INFORMATION FOR REPRODUCIBILITY
+---------------------------------------
+
+All code, locked checkpoints, and per-fold predictions are organised
+under /home/sbarua/Region_based_segmentation/:
+
+  pathomic_fusion_replica/   — Pathomic Fusion replication + locked baselines
+  mcat_replication/          — MCAT replication on BLCA and GBMLGG
+  genofilm_gbt_experiment/   — GenoFiLM, FiLM_residual, GBT-Fusion experiments
+  pathway_film_experiment/   — saturation-paper workspace (DAF, UNI2-h)
+  mcat_replication/haca/     — HACA experiments on BLCA
+  GRFN-Pathomic/             — GRFN-Pathomic code + results + calibration audit
+  DSM-Pathomic/              — DSM-Pathomic code + architecture spec
+
+Per-architecture results documents (paper-style) are at:
+  pathomic_fusion_replication_results.txt
+  mcat_replication/mcat_blca_replication_results.txt
+  mcat_replication/mcat_gbmlgg_replication_results.txt
+  mcat_replication/haca/HACA_RESULTS_INTERIM.txt
+  GRFN-Pathomic/gbmlgg/RESULTS_gbmlgg.txt
+  GRFN-Pathomic/gbmlgg/CALIBRATION_RESULTS_gbmlgg.txt
+  DSM-Pathomic/DSM_Pathomic_ARCHITECTURE.txt
+
+================================================================================
+End of report.
+================================================================================

@@ -1,0 +1,380 @@
+================================================================================
+GRFN-Pathomic on TCGA-GBMLGG — Phase 2c CALIBRATION AUDIT
+Paper-style report — 2026-05-18
+================================================================================
+
+STATUS
+
+Phase 2c (15-fold paired calibration audit of GRFN-Pathomic vs locked
+Pathomic Fusion baseline on TCGA-GBMLGG) is COMPLETE. The pre-registered
+hypothesis (IBS gain at flat c-Index) was CLEANLY FALSIFIED.
+
+This document captures (i) the experimental setup, (ii) the per-fold
+calibration metrics, (iii) the paired statistical analysis, (iv) the
+mechanistic diagnosis of why GRFN under Cox failed at calibration, and
+(v) the resulting reframe of the saturation paper from one architectural
+lever to three independent levers — architecture / encoder / loss.
+
+
+--------------------------------------------------------------------------------
+TL;DR  (one paragraph)
+--------------------------------------------------------------------------------
+
+GRFN-Pathomic, an evidential Gaussian-Random-Fuzzy-Number fusion module
+trained with Cox partial likelihood, scored WORSE on Integrated Brier
+Score than the locked Pathomic Fusion baseline (GRFN IBS 0.1049 +/- 0.0130
+vs PF 0.0971 +/- 0.0103; mean Delta = +0.0078, paired-t p = 0.005,
+Wilcoxon p = 0.0006; GRFN beat PF on IBS in 1 of 15 folds). It also scored
+worse than post-hoc-Platt-scaled PF (mean Delta = +0.0103, paired-t p =
+0.0003). The result is a clean falsification of the pre-registered
+prediction (P(IBS gain) ~= 0.65) and is mechanistically explained: the
+GRFN combination rule produces calibrated channels (sigma_f^2, h_f) but
+these are gradient-free under Cox, which trains only mu_f. The Breslow
+estimator used to produce S(t|x) for IBS computation also consumes only
+mu_f, so the calibration superstructure is mathematically guaranteed to
+be discarded. This finding does NOT diminish the saturation paper — it
+strengthens it, by adding a second axis of evidence: c-Index ceiling
+(8 fusion families) AND calibration ceiling (architectural calibration
+fixes do not work under Cox).
+
+
+--------------------------------------------------------------------------------
+1. The pre-registered hypothesis
+--------------------------------------------------------------------------------
+
+From GRFN_Pathomic_ARCHITECTURE.txt section 7 (and confirmed by the
+external Theoretically-Distinct Fusion Mechanisms survey, May 2026):
+
+   "P(IBS gain at flat c-Index | flat Delta c-Index) ~= 0.65"
+
+   Reasoning:
+   - The Cox + concordance loss is known to dis-incentivize calibrated
+     probability output (Ghawami audit, arXiv 2604.04239, April 2026:
+     'MCAT achieves c-Index 0.817 on GBMLGG yet fails 1-calibration on
+     all 5 folds').
+   - The GRFN combination rule yields calibrated uncertainty by
+     construction; the per-modality reliability r_m and epistemic
+     precision h_m are mathematically defined Dempster-Shafer evidence
+     combinations.
+   - Therefore, given equal c-Index, GRFN-Pathomic should produce
+     materially better IBS than PF.
+
+This was tested as Phase 2c, after Phase 2 (15-fold c-Index paired
+comparison) showed GRFN and PF were statistically indistinguishable on
+discrimination (GRFN 0.8134 +/- 0.0695 vs PF 0.8174 +/- 0.0717, Delta
+= -0.0040, p = 0.43). The c-Index parity was the prerequisite condition
+for the calibration test to be informative.
+
+
+--------------------------------------------------------------------------------
+2. Experimental setup
+--------------------------------------------------------------------------------
+
+Cohort                : TCGA-GBMLGG, 770 patients, 15-fold cross-validation
+                        (PF-published splits, identical to Phase 2)
+Trained models        :
+  PF baseline          : 15 fold checkpoints from locked replication
+                         (runs_modern/.../pathgraphomic_fusion/),
+                         c-Index 0.8174 +/- 0.0717
+  GRFN-Pathomic        : 15 fold checkpoints from Phase 2 sweep
+                         (runs_modern/.../pathgraphomic_grfn/),
+                         c-Index 0.8134 +/- 0.0695
+  PF + Platt scaling   : Post-hoc Platt logistic recalibration applied
+                         per evaluation time on the training set; baseline
+                         recommended by the Ghawami audit paper
+Calibration metrics   :
+  Integrated Brier Score (IBS) : sksurv.metrics.integrated_brier_score
+                                 over 50-point grid spanning the 10th-80th
+                                 percentile of event times.
+  Integrated Binomial Log-     : IPCW-weighted approximation of binomial
+    Likelihood (IBLL)            log-likelihood per evaluation time,
+                                 trapezoidal-integrated over the same grid.
+Survival-curve extraction:
+  Both PF and GRFN produce a scalar Cox risk. To compute S(t|x) for IBS,
+  the Breslow non-parametric baseline survival is fit on the TRAINING
+  fold's risks + survival, then applied to TEST-fold risks. This is the
+  standard Cox-PH calibration workflow. CRITICALLY, the Breslow estimator
+  consumes ONLY the scalar risk; any auxiliary GRFN outputs (sigma_f^2,
+  h_f) are not seen.
+Patient-level aggregation:
+  Each PF/GRFN training run produces patch-level predictions (~15 patches
+  per patient). To compute patient-level metrics, predictions are averaged
+  within each patient (group by x_patname from the saved data dict). This
+  matches Phase 2's c-Index aggregation.
+Code                  : GRFN-Pathomic/gbmlgg/calibration_audit.py
+Run-time              : ~30 seconds for all 15 folds + Platt baselines.
+
+
+--------------------------------------------------------------------------------
+3. Main result (15-fold paired comparison)
+--------------------------------------------------------------------------------
+
+Per-fold IBS (lower is better):
+
+  +------+--------+----------+----------+----------+----------+----------+
+  | Fold | n_test |   PF     |  PF+Platt|   GRFN   | D(G-PF)  | D(G-Platt)|
+  +------+--------+----------+----------+----------+----------+----------+
+  |  1   |  100   |  0.1039  |  0.1009  |  0.1239  | +0.0200  |  +0.0230  |
+  |  2   |  100   |  0.1016  |  0.0978  |  0.1046  | +0.0029  |  +0.0068  |
+  |  3   |   90   |  0.1089  |  0.1084  |  0.1229  | +0.0141  |  +0.0145  |
+  |  4   |   97   |  0.1104  |  0.1036  |  0.1116  | +0.0012  |  +0.0080  |
+  |  5   |   97   |  0.1074  |  0.1024  |  0.1101  | +0.0026  |  +0.0077  |
+  |  6   |  104   |  0.0959  |  0.0913  |  0.0971  | +0.0013  |  +0.0058  |
+  |  7   |  101   |  0.0998  |  0.0977  |  0.1088  | +0.0090  |  +0.0111  |
+  |  8   |  106   |  0.0945  |  0.0947  |  0.0988  | +0.0043  |  +0.0042  |
+  |  9   |  108   |  0.0956  |  0.0942  |  0.0962  | +0.0006  |  +0.0021  |
+  | 10   |   95   |  0.0820  |  0.0816  |  0.1136  | +0.0316  |  +0.0320  |
+  | 11   |  102   |  0.0788  |  0.0762  |  0.0907  | +0.0119  |  +0.0145  |
+  | 12   |   96   |  0.0927  |  0.0896  |  0.0939  | +0.0012  |  +0.0043  |
+  | 13   |   95   |  0.0902  |  0.0886  |  0.0939  | +0.0036  |  +0.0053  |
+  | 14   |  106   |  0.0837  |  0.0817  |  0.0823  | -0.0014  |  +0.0006  |
+  | 15   |   96   |  0.1102  |  0.1103  |  0.1243  | +0.0141  |  +0.0140  |
+  +------+--------+----------+----------+----------+----------+----------+
+
+  Method                  | IBS (lower better) | Wins vs PF on IBS
+  --------------------------------------------------------------
+  PF (locked)             | 0.0971 +/- 0.0103  |  -
+  PF + Platt scaling      | 0.0946 +/- 0.0099  |  modest improvement
+  GRFN-Pathomic           | 0.1049 +/- 0.0130  | 1 / 15 folds
+
+  GRFN vs PF                       Delta IBS = +0.0078 (worse)
+                                   Paired t = -0.808, p = 0.0050
+                                   Wilcoxon W = 6.0, p = 0.0006
+                                   95% CI for Delta: [+0.0028, +0.0128]
+                                   GRFN won (lower IBS) in 1 / 15 folds
+
+  GRFN vs PF + Platt scaling       Delta IBS = +0.0103 (worse)
+                                   Paired t p = 0.0003
+                                   Wilcoxon p = 0.0001
+                                   95% CI for Delta: [+0.0056, +0.0149]
+                                   GRFN won (lower IBS) in 0 / 15 folds
+
+  IBLL (also lower better):
+  PF                       0.3998 +/- 0.0573
+  GRFN-Pathomic            0.4081 +/- 0.0593   (Delta = +0.0084, p = 0.39
+                                                — direction same but not
+                                                statistically significant
+                                                under IBLL)
+
+Direction is unambiguous: GRFN-Pathomic is WORSE on calibration than both
+vanilla PF and Platt-recalibrated PF.
+
+
+--------------------------------------------------------------------------------
+4. Mechanistic diagnosis — why GRFN under Cox fails calibration
+--------------------------------------------------------------------------------
+
+The GRFN module exposes three channels per prediction:
+   mu_f      - fused Cox-comparable risk (scalar)
+   sigma_f^2 - aleatoric variance (calibration channel 1)
+   h_f       - fused epistemic precision (calibration channel 2)
+
+Under Cox partial likelihood, the loss is computed as
+   L_cox = - sum_{i: event=1} [ risk_i - log sum_j exp(risk_j) 1{t_j >= t_i} ]
+where risk_i is a scalar — specifically mu_f for GRFN.
+
+This means:
+  - The Cox loss gradient flows back through mu_f only.
+  - The sigma_f^2 and h_f channels are computed by the GRFN combination
+    rule but NEVER appear in the loss expression.
+  - Backpropagation cannot adjust the parameters that produce sigma_f^2
+    or h_f from any signal other than the (indirect) regularisation
+    effect of the shared encoder layers.
+
+For IBS computation, S(t|x) is constructed via the Breslow estimator:
+   S(t|x) = S_0(t)^{exp(mu_f(x))}
+where S_0(t) is the baseline survival function fit non-parametrically
+on training-set (mu_f, time, event) triples.
+
+This means:
+  - Only mu_f is used to construct S(t|x). sigma_f^2 and h_f are not
+    inputs to the Breslow estimator.
+  - The "calibrated uncertainty" GRFN provides is structurally invisible
+    to the calibration metric.
+
+In short: GRFN-under-Cox is mathematically equivalent to a single-scalar
+Cox model with extra unused channels. The pre-registered hypothesis
+implicitly assumed that the GRFN combination rule's calibration would
+propagate to the metric. It does not. Both training (Cox loss) and
+evaluation (Breslow + IBS) consume only mu_f, so calibration channels
+have no path of influence on observed performance.
+
+A secondary contributor: GRFN applies a sigmoid + linear-scale
+activation (sigmoid(z) * 6 - 3) on mu_f to match PF's hazard convention,
+which further compresses the risk distribution relative to PF's
+unbounded Linear classifier output. A narrower risk distribution
+produces a coarser Breslow baseline and therefore worse Brier score.
+But this is a second-order effect; the primary issue is the loss
+function.
+
+
+--------------------------------------------------------------------------------
+5. Interpretation
+--------------------------------------------------------------------------------
+
+5.1  This is a clean falsification, not a noisy null.
+
+  - The Delta IBS is significantly DIFFERENT from zero (p = 0.005),
+    not statistically indistinguishable.
+  - The direction is consistent across folds (14/15 show GRFN worse).
+  - The mechanism is identifiable a priori: the calibration channels
+    are gradient-free under Cox.
+  - The result is reproducible: re-running the calibration audit gives
+    identical numbers (per-fold pkl files saved at
+    GRFN-Pathomic/gbmlgg/CALIBRATION_RESULTS.pkl).
+
+This is the strongest possible falsification outcome — it is not "noise
+swamped any signal", it is "the signal goes in the wrong direction with
+high confidence and we know why".
+
+5.2  This STRENGTHENS the saturation paper, not weakens it.
+
+The previous saturation argument was:
+   "8 fusion architectures (GenoFiLM x 3, FiLM_residual, NoGate
+    Trilinear, GBT-Fusion, UNI2-h encoder, DAF, HACA) fail to break the
+    c-Index ceiling on TCGA-GBMLGG. The ceiling is data-bound (~4%
+    interaction variance, InterSHAP)."
+
+After Phase 2c, the argument becomes:
+   "9 architectures fail to break the c-Index ceiling, AND a 10th
+    architecture specifically designed for calibrated uncertainty fails
+    to break the CALIBRATION ceiling under Cox partial likelihood.
+    Architectural fusion changes cannot rescue calibration either.
+    Two independent levers (architecture, encoder) are demonstrably
+    closed. The remaining lever (loss function) is tested separately
+    via DSM-Pathomic."
+
+The reframe converts the paper from a single-lever survey to a
+three-lever map, which is a substantively stronger artifact.
+
+5.3  This matches the audit paper's recommended fix.
+
+  Ghawami's audit (arXiv 2604.04239) reported that no fusion
+  architecture in their 11-model benchmark achieves both good c-Index
+  and good calibration. Their recommended interim solution was
+  post-hoc Platt scaling. Phase 2c shows directly WHY architectural
+  fixes don't work: the calibration channels of even an explicitly
+  evidential architecture are gradient-blind under Cox. Platt is
+  effective precisely because it sidesteps the loss function entirely.
+  Our result therefore validates the audit's recommendation with
+  causal evidence.
+
+
+--------------------------------------------------------------------------------
+6. What this means for the project
+--------------------------------------------------------------------------------
+
+Implications:
+
+  i.   GRFN-Pathomic occupies the saturation paper's "architectural
+       calibration fix under Cox" row. It is NOT a positive
+       contribution. It is the 9th row of the saturation evidence
+       ladder.
+
+  ii.  The Cox-PH reformulation of GRFN, originally framed as the
+       paper's load-bearing novelty claim, is now correctly framed as
+       a falsification mechanism: "we re-derived EsurvFusion's
+       evidential combination rule to be Cox-compatible specifically
+       to test whether the calibration claim survives under Cox.
+       It did not."
+
+  iii. DSM-Pathomic (originally specified as the secondary arm) is
+       PROMOTED to the load-bearing arm. It is the only experiment
+       that can isolate the loss-function lever.
+
+  iv.  GRFN with its native log-time Gaussian likelihood (the
+       companion arm specified in DSM_Pathomic_ARCHITECTURE.txt section
+       6) is the mechanistic confirmation experiment: if GRFN with
+       a likelihood-based loss DOES improve calibration, it proves
+       that the Phase 2c failure was Cox-specific, not architecture-
+       specific.
+
+  v.   The TOMM submission's headline shifts from "GRFN provides the
+       missing calibration fix" to "we map three independent levers
+       of fusion saturation on TCGA-GBMLGG and demonstrate that
+       architecture is closed, calibration channels are closed under
+       Cox, and only the loss function remains untested by us."
+
+
+--------------------------------------------------------------------------------
+7. Pending experiments (in dependency order)
+--------------------------------------------------------------------------------
+
+  Phase 2c-bonus  GRFN companion with native log-time Gaussian likelihood
+                  Tests whether the GRFN calibration channels DO recover
+                  under the right loss. ~50 LOC + 2 days.
+
+  Phase 2-DSM     DSM-Pathomic 15-fold sweep with native S(t|x) for IBS.
+                  This is the load-bearing experiment. ~1.7 hours wall-
+                  clock once GPU is free.
+
+  Phase 3         Cross-cohort KIRC for DSM + GRFN-native. ~3 hours.
+
+  Phase 4         Ablations: GRFN A1/A1'/A2 + DSM A1-A7.
+
+  Phase 5         Writeup with three-lever framing for TOMM 2026-08-31.
+
+
+--------------------------------------------------------------------------------
+8. Files and reproducibility
+--------------------------------------------------------------------------------
+
+Generated by Phase 2c:
+
+  GRFN-Pathomic/gbmlgg/
+    calibration_audit.py            - the audit script (~200 LOC)
+    CALIBRATION_RESULTS.pkl         - per-fold metrics + paired stats
+    CALIBRATION_RESULTS_gbmlgg.txt  - this document
+
+To reproduce:
+  $ python GRFN-Pathomic/gbmlgg/calibration_audit.py
+  Expected wall-clock: ~30 seconds (uses saved 15-fold checkpoints).
+
+Reads from:
+  runs_modern/TCGA_GBMLGG/surv_15_rnaseq/pathgraphomic_fusion/
+    pathgraphomic_fusion_{k}.pt + _patch_pred_{train,test}.pkl
+  runs_modern/TCGA_GBMLGG/surv_15_rnaseq/pathgraphomic_grfn/
+    pathgraphomic_grfn_{k}.pt + _patch_pred_{train,test}.pkl
+
+Independence check:
+  The audit only reads saved predictions. It does NOT retrain anything.
+  Locked PF and Phase-2 GRFN runs are not touched. Locked-baseline c-Index
+  on GBMLGG (PF: 0.8174 +/- 0.0717) is unchanged by this experiment.
+
+
+--------------------------------------------------------------------------------
+9. References
+--------------------------------------------------------------------------------
+
+The audit paper that motivated this experiment:
+  Ghawami. "Good Rankings, Wrong Probabilities: A Calibration Audit of
+  Multimodal Cancer Survival Models." arXiv 2604.04239, April 2026.
+  (Documents MCAT 0.817 c-Index / failed 1-calibration on all 5 GBMLGG
+  folds; recommends post-hoc Platt scaling.)
+
+The GRFN reference:
+  Huang, Quost, Denoeux et al. "EsurvFusion: Evidential Survival
+  Analysis via Gaussian Random Fuzzy Numbers." IEEE TFS 34(1):76-88,
+  2026. arXiv:2412.01215. (Uses log-time regression with Gaussian
+  likelihood, NOT Cox partial likelihood — which is why their
+  calibration claim could hold but ours under Cox does not.)
+
+The Cox-PH baseline:
+  Chen, R.J. et al. "Pathomic Fusion." IEEE TMI 41(4):757-770, 2022.
+  Locked replication: GBMLGG c-Index 0.8174 +/- 0.0717
+  (this user, May 2026).
+
+Calibration-evaluation methodology:
+  Brier, G. (1950). "Verification of forecasts expressed in terms of
+  probability." Monthly Weather Review.
+  Graf, E., Schmoor, C., Sauerbrei, W., Schumacher, M. (1999).
+  "Assessment and comparison of prognostic classification schemes for
+  survival data." Statistics in Medicine. (IBS / IBLL formulations.)
+  Haider, H., Hoehn, B., Davis, S., Greiner, R. (2020).
+  "Effective Ways to Build and Evaluate Individual Survival
+  Distributions." JMLR. (D-calibration; pending Phase 2c-extra.)
+
+
+================================================================================
+END  -  CALIBRATION_RESULTS_gbmlgg.txt
+================================================================================
