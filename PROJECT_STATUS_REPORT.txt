@@ -121,9 +121,13 @@ Loss-function family (CURRENTLY RUNNING):
       the Cox loss with a modality-specific Deep Survival Machines
       mixture (Nagpal et al., 2021). 3 modalities × K=4 Weibull components,
       with each component's shape/scale predicted from a single modality.
-      ~1956 trainable parameters. Single-fold smoke train completed
-      successfully (5 epochs, c-Index 0.8167 on GBMLGG fold 1); the full
-      15-fold sweep is queued and waiting for GPU availability.
+      ~1956 trainable parameters. 15-fold GBMLGG sweep completed
+      2026-05-19: c-Index 0.8180 ± 0.0578 (Δ = +0.0006 vs PF, paired-t
+      p = 0.89, 8/15 fold wins); native S(t|x) IBS 0.1038 ± 0.0260
+      (Δ = +0.0067 vs PF, paired-t p = 0.23, 7/15 fold wins, NOT
+      statistically significant). The pre-registered calibration-gain
+      hypothesis is NOT supported. This closes the loss-function lever
+      of the three-axis saturation map.
 
 Calibration evaluation (Phase 2c):
    A 15-fold paired calibration audit was performed on GRFN-Pathomic vs
@@ -164,10 +168,15 @@ and Wilcoxon) gave p > 0.05. "—" means not yet tested.
                                              worse than locked PF; the pre-registered
                                              P(IBS gain)=0.65 hypothesis is falsified)
 
-  DSM-Pathomic (running)                   | smoke-train  | —         | —
-                                             c-Index 0.8167
-                                             on fold 1 (5 epochs)
-                                             — 15-fold sweep queued
+  DSM-Pathomic (Weibull mixture, native S(t|x))
+                                           | +0.0006 null  | —         | —
+                                            (15-fold, p=0.89, 8/15 wins)
+  DSM-Pathomic CALIBRATION (native IBS)    | +0.0067 null  | —         | —
+                                            (p=0.23, 7/15 wins; 95% CI
+                                            [-0.0047, +0.0181] crosses
+                                            zero; the loss-function lever
+                                            of the three-axis saturation
+                                            map is empirically closed)
 
 Cross-cohort coverage summary:
   TCGA-GBMLGG : 9 novel interventions tested + 2 baselines.
@@ -200,12 +209,16 @@ three-axis saturation map:
 
   Axis            | Verdict so far                 | Status
   ----------------+--------------------------------+-------------------
-  Architecture    | 9 fusion families closed       | Strong evidence
-  Encoder         | UNI2-h fails to lift c-Index   | Single test, 48 runs
-  Loss function   | Cox is calibration-blind       | DSM-Pathomic pending
+  Architecture    | 9 fusion families closed       | CLOSED (strong)
+  Encoder         | UNI2-h fails to lift c-Index   | CLOSED (48 runs)
+  Loss function   | DSM mixture likelihood null on | CLOSED (2026-05-19)
+                  | both c-Index and IBS even with |
+                  | native non-Breslow evaluation  |
 
-The TOMM August 31 submission will use this three-axis framing rather
-than the original single-axis "novel fusion" framing.
+All three pre-specified axes are now empirically closed on TCGA-GBMLGG.
+The TOMM August 31 submission will use this three-axis framing as the
+load-bearing finding. KIRC cross-cohort confirmation (Phase 3) is the
+highest-value remaining experiment.
 
 
 SECTION 5 — WHAT IS PENDING

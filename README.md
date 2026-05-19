@@ -86,7 +86,7 @@ saturation map**: architecture (closed), encoder (closed), loss function
 | DAF (signed disagreement) | +0.0018 null | — | — |
 | HACA (3 variants) | — | — | null (best Δ = −0.006) |
 | **GRFN-Pathomic** (architectural calibration channels under Cox) | Δ c-Index = −0.0040 null; **Δ IBS = +0.0078 (p=0.005, falsified)** | (pending) | — |
-| **DSM-Pathomic** (loss-function lever) | smoke fold-1 = 0.8167 (5 epochs); 15-fold sweep queued | (pending) | — |
+| **DSM-Pathomic** (loss-function lever; Weibull mixture, native S(t\|x), no Breslow) | Δ c-Index = +0.0006 (p=0.89) null; **Δ IBS = +0.0067 (p=0.23) null** | (pending) | — |
 
 Per-fold tables, paired t-tests, Wilcoxon signed-rank, 95% CIs, and
 mechanistic diagnoses live in the `reports/` directory.
@@ -97,9 +97,12 @@ mechanistic diagnoses live in the `reports/` directory.
 
 | Axis | Evidence so far | Status |
 |---|---|---|
-| **Architecture** | 9 fusion families nulled on GBMLGG, 3 on BLCA | strong evidence, single cohort each |
-| **Encoder** | UNI2-h null over 48 paired runs on GBMLGG | one test, large n |
-| **Loss function** | GRFN under Cox fails to deliver calibration; DSM mixture likelihood is the open arm | DSM-Pathomic sweep in flight |
+| **Architecture** | 9 fusion families nulled on GBMLGG, 3 on BLCA | CLOSED on single cohort |
+| **Encoder** | UNI2-h null over 48 paired runs on GBMLGG | CLOSED |
+| **Loss function** | DSM-Pathomic Weibull mixture: native S(t\|x) IBS 0.1038 ± 0.026 vs PF 0.0971 ± 0.010 (p=0.23 null) | **CLOSED** — completed 2026-05-19 |
+
+**All three pre-specified axes are now empirically closed on TCGA-GBMLGG.**
+The KIRC cross-cohort confirmation (Phase 3) is the next experiment.
 
 **Cox is calibration-blind.** GRFN-Pathomic computes calibrated channels
 (σ²_f and h_f) but they are gradient-free when trained with Cox partial
