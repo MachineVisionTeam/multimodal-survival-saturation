@@ -8,14 +8,14 @@ extraction, GMM fitting, pkl building, or model training has occurred for
 BLCA at the time of this commit. The hash of this commit serves as the
 temporal anchor.
 **Parent commits (for context):**
-- `4f5c6a6` — PCAF-Pathway pre-registration (KIRC + GBMLGG)
-- `be3654b` — PCAF-Pathway results (KIRC CLEAN WIN, GBMLGG NULL)
+- `22cf6d1` — PCAF-Pathway pre-registration (KIRC + GBMLGG)
+- `38d78f5` — PCAF-Pathway results (KIRC CLEAN WIN, GBMLGG NULL)
 
 ---
 
 ## 1. Motivation
 
-The PCAF-Pathway 2×2 block (committed at `be3654b`) produced:
+The PCAF-Pathway 2×2 block (committed at `38d78f5`) produced:
 - **KIRC: CLEAN WIN** — Δ = +0.0301, paired-t p = 0.029, Wilcoxon p = 0.035
 - **GBMLGG: NULL** — Δ = −0.0128, paired-t p = 0.412
 - **Mechanism:** the entire gain comes from the omic representation axis

@@ -75,9 +75,9 @@ live in `conch_pathomic/` and `reports/`.
 │   └── recover_failed_clam_slides.py
 │
 └── conch_pathomic/                              (Axes 2 + 4 — CONCH-Pathomic / PCAF-Pathway)
-    ├── PCAF_PATHWAY_PREREGISTRATION.md          (KIRC + GBMLGG 2×2 pre-reg, hash 4f5c6a6)
+    ├── PCAF_PATHWAY_PREREGISTRATION.md          (KIRC + GBMLGG 2×2 pre-reg, hash 22cf6d1)
     ├── PCAF_PATHWAY_RESULTS.md                  (KIRC CLEAN WIN +0.030 / GBMLGG NULL)
-    ├── BLCA_CONCH_BIMODAL_PREREGISTRATION.md    (BLCA 2-cell pre-reg, hash dcb7d7c)
+    ├── BLCA_CONCH_BIMODAL_PREREGISTRATION.md    (BLCA 2-cell pre-reg, hash 63ae06a)
     └── BLCA_CONCH_BIMODAL_RESULTS.md            (BLCA spirit-WIN +0.058)
 ```
 
@@ -142,8 +142,8 @@ All headline experiments were **pre-registered with commit-hash anchors before a
 |---|---|---|
 | GRFN-Pathomic calibration falsification | (see `architecture/GRFN_Pathomic_ARCHITECTURE.txt`) | (see `reports/GRFN_CALIBRATION_RESULTS_gbmlgg.txt`) |
 | DSM-Pathomic Phase 2 | (see `architecture/DSM_Pathomic_ARCHITECTURE.txt`) | `c6b0a5c` |
-| **PCAF-Pathway 2×2 (KIRC + GBMLGG)** | **`4f5c6a6`** (2026-05-22T04:36:00Z) | **`be3654b`** |
-| **BLCA CONCH-Bimodal 2-cell** | **`dcb7d7c`** (2026-05-22T18:19:18Z) | **`8c4cbb7`** |
+| **PCAF-Pathway 2×2 (KIRC + GBMLGG)** | **`22cf6d1`** (2026-05-22T04:36:00Z) | **`38d78f5`** |
+| **BLCA CONCH-Bimodal 2-cell** | **`63ae06a`** (2026-05-22T18:19:18Z) | **`62d8b95`** |
 
 The pre-registration documents specify success thresholds, statistical tests, and interpretation rules **before any results are observed**. Results documents apply those rules without modification.
 

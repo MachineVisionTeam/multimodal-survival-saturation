@@ -1,6 +1,6 @@
 # PCAF-Pathway 2×2 Locked Block — Final Results
 
-**Pre-registered at commit:** `4f5c6a608c9a041c77c304b8efac782201668b50` (`2026-05-22T04:36:00Z`)
+**Pre-registered at commit:** `22cf6d1` (`2026-05-22T04:36:00Z`)
 **Results computed at:** `2026-05-22T16:46:48Z`
 **Author:** Shemonti Barua · Machine Vision Team, Kennesaw State University
 
@@ -215,7 +215,7 @@ A pre-registered 30 % event came true on KIRC (a moderately-likely outcome — n
 - Per-sweep logs: `pcaf_logs/{KIRC,GBMLGG}_<mode>_gpu<N>.log`
 - Final analysis output: `pcaf_logs/PCAF_FINAL_RESULTS.txt`
 - This document: `_publish/multimodal-survival-saturation/conch_pathomic/PCAF_PATHWAY_RESULTS.md`
-- Pre-registration: `_publish/.../PCAF_PATHWAY_PREREGISTRATION.md` (commit 4f5c6a6)
+- Pre-registration: `_publish/.../PCAF_PATHWAY_PREREGISTRATION.md` (commit 22cf6d1)
 - Pathway-token construction script: `CONCH-Pathomic/build_pathway_tokens.py`
 - Hallmark mapping: `CONCH-Pathomic/SurvPath/datasets_csv/pathway_compositions/hallmarks_comps.csv`
 - New network files: `pathomic_fusion_replica/PathomicFusion/network_conch_{xattn,pathway,pcaf}.py`

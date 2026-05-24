@@ -1,6 +1,6 @@
 # BLCA CONCH-Bimodal Results — Third-cohort representation-axis test
 
-**Pre-registered at:** `dcb7d7c` (`2026-05-22T18:19:18Z`, BEFORE any training)
+**Pre-registered at:** `63ae06a` (`2026-05-22T18:19:18Z`, BEFORE any training)
 **Results computed at:** `2026-05-23T20:08:05Z`
 **Author:** Shemonti Barua · Machine Vision Team, Kennesaw State University
 
@@ -105,7 +105,7 @@ Calibration: a 25 % event (MARGINAL WIN) materialized. The fact that the magnitu
 - **5 folds vs 15 folds:** This is the SurvPath convention for BLCA, used for direct literature comparability. The lower power gave a Wilcoxon floor of 0.0625; the literal pre-reg verdict is MARGINAL WIN.
 - **2-modal vs 3-modal:** BLCA uses CONCH-Bimodal (image + omic, no cell-graph) because BLCA does not have PF-format cell-graphs. KIRC and GBMLGG used the full 3-modal PF backbone. The architectural asymmetry is acknowledged in §3 of the pre-registration.
 - **The "flat omic" baseline differs across cohorts.** KIRC/GBMLGG used PF's curated 320-d vector. BLCA uses a Linear projection from full cBioPortal RNA-seq (20,430-d) because no equivalent curated panel exists. This is a fair within-BLCA comparison (both flat and pathway derive from the same RNA-seq) but is not directly comparable to KIRC/GBMLGG absolute c-Index.
-- **No re-tuning, no fishing.** The cell architectures, hyperparameters, and pre-registered thresholds were locked at commit `dcb7d7c` before any training. The results above use those exact specifications without modification.
+- **No re-tuning, no fishing.** The cell architectures, hyperparameters, and pre-registered thresholds were locked at commit `63ae06a` before any training. The results above use those exact specifications without modification.
 
 ## 10. What we conclude
 
@@ -117,4 +117,4 @@ This is a more textured and useful finding for the field than either a pure-satu
 
 ---
 
-*End of results. No analysis was performed before the pre-registration was committed at `dcb7d7c`.*
+*End of results. No analysis was performed before the pre-registration was committed at `63ae06a`.*
