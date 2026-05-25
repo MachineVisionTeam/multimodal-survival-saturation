@@ -1,0 +1,34 @@
+BLCA SiBaCo vs Cell A' (CONCH-Pathomic-Bimodal BilinearFusion) — paired 5-fold
+==============================================================================
+
+Pre-registration: a224dc0 @ 2026-05-25T16:38:46Z
+Comparator:       Cell A' (flat omic, BilinearFusion; see BLCA_CONCH_BIMODAL_RESULTS.md)
+Analysis:         2026-05-25T17:30:00Z
+
+  Fold    A' (BilinFusion)     SiBaCo          Δ
+    1.    0.6198            0.6072     -0.0126
+    2.    0.5934            0.6605     +0.0671
+    3.    0.6240            0.6750     +0.0510
+    4.    0.6078            0.6480     +0.0402
+    5.    0.6335            0.5815     -0.0520
+------------------------------------------------------------------------------
+  Cell A':   0.6157 ± 0.0155
+  SiBaCo:    0.6344 ± 0.0389
+  Δ mean:    +0.0187, std 0.0494
+  Paired t:  t=0.845, p=0.4455
+  Wilcoxon:  W=5.0, p=0.6250
+  95% CI Δ:  [-0.0428, +0.0803]
+  Cohen's d: 0.378
+  Positive folds: 3/5
+  Verdict:   NULL
+
+Notes
+-----
+- Magnitude (+0.019) clears the pre-registered Δ ≥ +0.012 bar, but variance is large
+  (folds 1 and 5 swing negative −0.013 and −0.052; folds 2-4 swing positive +0.04 to +0.07),
+  so neither paired-t nor Wilcoxon clears p < 0.05. 95% CI on Δ straddles zero.
+- This matches the pre-registered prior for BLCA (P(NULL) = 45-55%; P(WIN) = 15-25%).
+- With n=5 the Wilcoxon floor is 0.0625 (2/2^5), so even a unanimous-sign result would
+  not have cleared the literal Wilcoxon bar; here only 3/5 are positive, so Wilcoxon
+  is well above the floor.
+- Cell A' baseline per-fold C-indices taken from BLCA_CONCH_BIMODAL_RESULTS.md.
