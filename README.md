@@ -16,17 +16,22 @@ Across **three TCGA cohorts × four pre-registered axes**, the result is:
 
 | Axis | What we tested | Result | Status |
 |---|---|---|---|
-| **1. Architecture / Fusion** | 10+ fusion families (GenoFiLM ×3, FiLM, NoGateTrilinear, DAF, HACA ×3, cross-attention) | null in 30+ paired comparisons | CLOSED on tested cohorts |
+| **1. Architecture / Fusion** | 11+ fusion families (GenoFiLM ×3, FiLM, NoGateTrilinear, DAF, HACA ×3, cross-attention, **SiBaCo entropic-OT barycenter**) | **WIN on KIRC (SiBaCo, +0.026)**, null on GBMLGG, null on BLCA — all other families null in 30+ paired comparisons | **PARTIALLY OPEN — 1/3 cohorts positive** |
 | **2. Encoder** | UNI2-h, CONCHv1.5 | null on 2 cohorts | CLOSED |
 | **3. Loss** | DSM (Weibull mixture, native S(t\|x)), GRFN (evidential) | null IBS; GRFN falsified | CLOSED |
 | **4. Representation** | flat curated omic → 50 Hallmark pathway tokens | **WIN on KIRC (+0.030), WIN on BLCA (+0.058), null on GBMLGG** | **PARTIALLY OPEN — 2/3 cohorts positive** |
 
-**The only positive axis is omic representation. Cross-attention fusion adds
-essentially zero on top of pathway tokens (paired Cell D − Cell C ≈ 0 on both
-3-modal cohorts). The cohort-dependence of the representation win is
-predicted by driver-gene-curation completeness** (GBMLGG nulls because its
-hand-curated 240-gene panel already includes IDH1/TP53/ATRX/1p-19q; KIRC and
-BLCA win because their curated panels under-represent kidney/bladder biology).
+**Two axes show isolated, cohort-specific gains; the rest are saturated.**
+Representation (pathway tokens) wins on 2/3 cohorts; fusion wins on 1/3
+(SiBaCo on KIRC only — every other fusion family is null on every cohort
+tested, including cross-attention and SiBaCo itself on GBMLGG/BLCA). The
+**same cohort-dependence pattern appears in both positive axes**: KIRC
+benefits, GBMLGG saturates, BLCA is noise-floor. The cohort-dependence of
+the representation win is predicted by driver-gene-curation completeness
+(GBMLGG nulls because its hand-curated 240-gene panel already includes
+IDH1/TP53/ATRX/1p-19q; KIRC and BLCA win because their curated panels
+under-represent kidney/bladder biology). The SiBaCo KIRC win is not yet
+mechanistically explained and is a candidate follow-up.
 
 All experiments are **pre-registered with commit-hash anchors** before any
 training run. Per-fold tables, paired-t / Wilcoxon, 95 % CIs, and verdicts
@@ -74,11 +79,16 @@ live in `conch_pathomic/` and `reports/`.
 │   ├── haca_train_utils.py
 │   └── recover_failed_clam_slides.py
 │
-└── conch_pathomic/                              (Axes 2 + 4 — CONCH-Pathomic / PCAF-Pathway)
+└── conch_pathomic/                              (Axes 1 + 2 + 4 — CONCH-Pathomic / PCAF-Pathway / SiBaCo)
     ├── PCAF_PATHWAY_PREREGISTRATION.md          (KIRC + GBMLGG 2×2 pre-reg, hash 22cf6d1)
     ├── PCAF_PATHWAY_RESULTS.md                  (KIRC CLEAN WIN +0.030 / GBMLGG NULL)
     ├── BLCA_CONCH_BIMODAL_PREREGISTRATION.md    (BLCA 2-cell pre-reg, hash 63ae06a)
-    └── BLCA_CONCH_BIMODAL_RESULTS.md            (BLCA spirit-WIN +0.058)
+    ├── BLCA_CONCH_BIMODAL_RESULTS.md            (BLCA spirit-WIN +0.058)
+    └── sibaco_fusion/                           (Axis 1: SiBaCo entropic-OT barycenter fusion)
+        ├── SIBACO_PREREGISTRATION.md            (3-cohort 1-cell pre-reg, hash a224dc0)
+        ├── kirc/RESULTS_kirc_sibaco.txt         (KIRC CLEAN WIN +0.0256, p=0.003)
+        ├── gbmlgg/RESULTS_gbmlgg_sibaco.txt     (GBMLGG NULL Δ=-0.002)
+        └── blca/RESULTS_blca_sibaco.txt         (BLCA NULL Δ=+0.019, p=0.45)
 ```
 
 ---
@@ -93,15 +103,27 @@ live in `conch_pathomic/` and `reports/`.
 | **GBMLGG** (n=489, 15 folds) | 0.8075 ± 0.077 | 0.8062 ± 0.073 | −0.0013 | 0.897 | 0.720 | NULL |
 | **BLCA** (n=359, 5 folds) | 0.6157 ± 0.016 | **0.6736 ± 0.029** | **+0.0580** | **0.0094** | 0.0625 (n=5 floor) | strict-MARGINAL / spirit-WIN |
 
-### Axis 1 — Fusion (closed across all cohorts)
+### Axis 1 — Fusion (1/3 cohorts positive via SiBaCo; cross-attention still null)
+
+**Cross-attention (PCAF) — null on both 3-modal cohorts:**
 
 | Cohort | Fusion-only Δ (Cell B − A) | Fusion-on-top-of-pathway Δ (Cell D − C) | Conclusion |
 |---|---|---|---|
-| KIRC | −0.0025 (p = 0.60) | +0.0002 | fusion adds zero |
-| GBMLGG | +0.0087 (p = 0.30) | −0.0115 | fusion adds zero |
+| KIRC | −0.0025 (p = 0.60) | +0.0002 | cross-attn adds zero |
+| GBMLGG | +0.0087 (p = 0.30) | −0.0115 | cross-attn adds zero |
 | BLCA | (not retested — known null) | — | inferred null |
 
-Plus prior nulls (in `reports/` and `grfn_pathomic/`, `haca_mcat/`): GenoFiLM × 3, FiLM_residual, NoGateTrilinear, DAF, HACA × 3 — all null on GBMLGG and/or BLCA. Across **30+ paired comparisons** with controlled representation, **no fusion mechanism produces a statistically significant c-Index improvement**.
+**SiBaCo (entropic-OT barycenter, 1-cell swap of TrilinearFusion_A / BilinearFusion):**
+
+| Cohort | Modalities | Baseline | SiBaCo | Δ | paired-t p | Wilcoxon p | Verdict |
+|---|---|---|---|---|---|---|---|
+| **KIRC** (15 folds) | 3-modal | 0.7188 ± 0.047 | **0.7444 ± 0.052** | **+0.0256** | **0.0028** | **0.0015** | **CLEAN WIN** (13/15 folds +) |
+| **GBMLGG** (15 folds) | 3-modal | 0.8075 ± 0.077 | 0.8058 ± 0.078 | −0.0017 | 0.7648 | 0.9341 | NULL |
+| **BLCA** (5 folds) | 2-modal | 0.6157 ± 0.016 | 0.6344 ± 0.039 | +0.0187 | 0.4455 | 0.6250 | NULL (3/5 folds, high variance) |
+
+SiBaCo is the **first positive fusion-axis result in the whole study** — but only on KIRC, and only as a 1-cell swap (no other knobs touched). The cross-cohort pattern (KIRC win, GBMLGG null, BLCA noisy) mirrors PCAF-Pathway. Full pre-registration and per-fold deltas: `conch_pathomic/sibaco_fusion/`.
+
+Plus prior nulls (in `reports/`, `grfn_pathomic/`, `haca_mcat/`): GenoFiLM × 3, FiLM_residual, NoGateTrilinear, DAF, HACA × 3 — all null on GBMLGG and/or BLCA. Across **35+ paired comparisons** with controlled representation, **only one fusion mechanism (SiBaCo) produces a statistically significant c-Index improvement, and only on one cohort (KIRC)**.
 
 ### Axis 2 — Encoder (closed across all tested cohorts)
 
@@ -125,12 +147,12 @@ Plus: UNI2-h null over 48 paired runs on GBMLGG (earlier work, see `reports/`).
 
 | Axis | Evidence | Status across tested cohorts |
 |---|---|---|
-| **1. Architecture / Fusion** | 10+ fusion families null; Cell B / Cell D − C ≈ 0 on KIRC + GBMLGG | CLOSED |
+| **1. Architecture / Fusion** | 11+ fusion families; only **SiBaCo on KIRC** wins (+0.026, p=0.003); SiBaCo nulls GBMLGG/BLCA; everything else (cross-attn, GenoFiLM, FiLM, DAF, HACA, NoGateTrilinear) null on every cohort tested | **PARTIALLY OPEN — 1/3 cohorts** |
 | **2. Encoder** | CONCHv1.5 + UNI2-h null on both 3-modal cohorts | CLOSED |
 | **3. Loss function** | DSM null; GRFN mechanistically falsified under Cox | CLOSED |
-| **4. Representation** | Pathway tokens: +0.030 KIRC, +0.058 BLCA, null GBMLGG (cohort-dependent) | **PARTIALLY OPEN** |
+| **4. Representation** | Pathway tokens: +0.030 KIRC, +0.058 BLCA, null GBMLGG (cohort-dependent) | **PARTIALLY OPEN — 2/3 cohorts** |
 
-**Headline message for the field:** *the past three years of "novel fusion architecture" papers in multimodal cancer survival have been working in a 3–5 % cross-modal-interaction ceiling (consistent with the InterSHAP audit, arXiv 2603.29977). The actual load-bearing axis is omic representation. Replace flat curated omics with biologically organized pathway tokens, and you get +0.030 to +0.058 c-Index on cohorts where the curated panel doesn't already capture dominant driver-gene signal.*
+**Headline message for the field:** *the past three years of "novel fusion architecture" papers in multimodal cancer survival have been working in a 3–5 % cross-modal-interaction ceiling (consistent with the InterSHAP audit, arXiv 2603.29977). With 35+ paired comparisons across 11 fusion families and 3 cohorts, only a single combination produces a statistically significant fusion-axis gain (SiBaCo on KIRC, +0.026); the rest are null. The actual load-bearing axis is omic representation: replace flat curated omics with biologically organized pathway tokens, and you get +0.030 to +0.058 c-Index on cohorts where the curated panel doesn't already capture dominant driver-gene signal. Both positive axes show the same cohort-dependence pattern (KIRC > BLCA > GBMLGG), suggesting cohort-specific saturation rather than universal fusion failure.*
 
 ---
 
@@ -144,6 +166,7 @@ All headline experiments were **pre-registered with commit-hash anchors before a
 | DSM-Pathomic Phase 2 | (see `architecture/DSM_Pathomic_ARCHITECTURE.txt`) | `c6b0a5c` |
 | **PCAF-Pathway 2×2 (KIRC + GBMLGG)** | **`22cf6d1`** (2026-05-22T04:36:00Z) | **`38d78f5`** |
 | **BLCA CONCH-Bimodal 2-cell** | **`63ae06a`** (2026-05-22T18:19:18Z) | **`62d8b95`** |
+| **SiBaCo 1-cell fusion swap (KIRC + GBMLGG + BLCA)** | **`a224dc0`** (2026-05-25T16:38:46Z) | KIRC `f4a6892` / GBMLGG `6aec1f3` / BLCA `bac54f0` |
 
 The pre-registration documents specify success thresholds, statistical tests, and interpretation rules **before any results are observed**. Results documents apply those rules without modification.
 
